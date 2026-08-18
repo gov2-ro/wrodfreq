@@ -72,6 +72,7 @@ def _handle_signal(sig, frame):
 
 signal.signal(signal.SIGTERM, _handle_signal)
 signal.signal(signal.SIGHUP, _handle_signal)
+signal.signal(signal.SIGINT, _handle_signal)
 
 
 def _empty_checkpoint() -> dict:
