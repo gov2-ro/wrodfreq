@@ -59,3 +59,21 @@ expected, not a denominator bug — the real bug signature is a function word la
 *low* or missing outright. `validate.py`'s pre-`merged` per-source fallback now uses
 `ZIPF_HIGH_SINGLE_SOURCE = 8.0` instead of 7.5, documented inline; the spec-literal
 6.0–7.5 band still gates once `merged` exists.
+
+## 2026-08-18 — M2 started: CulturaX ingester written and smoke-tested
+
+`build/ingest_web.py` — the CulturaX RO backbone ingester, lifted wholesale from
+oțios's `process_culturax.py` checkpointing/row-group-resume machinery (spec §4), with
+the two spec-mandated departures: no DEX word filter (§3.1, open vocabulary) and no
+`len(t) > 2` filter (§3.2, uses `wrodfreq.tokenizer` directly). Confirmed HF auth
+already works in the new venv (global `~/.cache/huggingface/token`) and that
+`uonlp/CulturaX/ro` lists its 64 parquet shards without further gating.
+
+Smoke-tested with `--test` (first 1000 docs of shard 0): 567,318 tokens, top words
+de/în/și/a/la/cu — sane. Checkpoint is real, additive progress (not test-only
+throwaway state), so `--resume` continues correctly from row 1000 of shard 0.
+
+**Not run to completion** — CulturaX is ~40B raw tokens across 64 shards, the
+spec's own "multi-day job" (§13 M2). Per session instruction, handed the launch
+command (with oțios's restart-loop pattern) to the user to run directly rather than
+starting it here.
