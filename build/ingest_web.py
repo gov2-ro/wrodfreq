@@ -250,6 +250,10 @@ def process_file(
                 texts = texts[skip_in_group:]
 
             for text in texts:
+                if _shutdown:
+                    checkpoint_progress("in_progress")
+                    return session_docs, session_tokens, True
+
                 total_so_far = cp["docs_in_completed_files"] + start_row + session_docs
                 if limit is not None and total_so_far >= limit:
                     checkpoint_progress("in_progress")
