@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wrodfreq"
+version = "0.1.0"
+description = "Romanian word-frequency table on the Zipf scale — drop-in compatible with wordfreq"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "pax", email = "pax@mioritics.ro" }]
+
+[project.optional-dependencies]
+# Third-party deps needed only by the build/ pipeline scripts, never at import
+# time by the shipped wrodfreq package.
+build = [
+    "datasets>=2.19",
+    "huggingface_hub>=0.23",
+]
+dev = [
+    "pytest>=8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["wrodfreq"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

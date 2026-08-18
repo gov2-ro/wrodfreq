@@ -1,0 +1,46 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging (setuptools writes build/lib, build/bdist.* here — NOT the same
+# path as the tracked build/ pipeline-stage scripts, which stay in git)
+build/lib/
+build/bdist.*/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+.env.*
+
+# Data artifacts — corpora, checkpoints, the built SQLite table, the packaged
+# surface-table blob. No .db or .csv in git, ever; large artifacts ship as
+# GitHub release assets or get rebuilt by build/build_package.py, never committed.
+/data/
+*.db
+*.csv
+*.parquet
+wrodfreq/data/*.msgpack.xz
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+*.swp
