@@ -77,3 +77,44 @@ throwaway state), so `--resume` continues correctly from row 1000 of shard 0.
 spec's own "multi-day job" (§13 M2). Per session instruction, handed the launch
 command (with oțios's restart-loop pattern) to the user to run directly rather than
 starting it here.
+
+## 2026-08-23 — M2 finished: CulturaX RO ingest complete
+
+User ran `build/ingest_web.py` to completion outside this session: all 64 shards,
+23,516,444,566 tokens, 40,325,424 docs, `sources.status = 'completed'`. Verified via
+`compute_zipf.py` (`web` floor -0.67, as expected for a ~23.5B-token source) and
+`validate.py` — function words (`de`/`și`/`la`/`un`/`cu`) land in-band for both `wiki`
+and `web`, and idempotence (check 6) passes across a re-run of stages 2. M2 (spec §13)
+is done: `sources.total_tokens` for `web` is well inside the 15–20B+ target range and
+validation check 4 (rank correlation prerequisite) is clear to run once `merged` exists.
+
+## 2026-08-25 — M3 started: CC-News RO ingester scaffolded, not yet verified
+
+`build/ingest_news.py` — the `news` source ingester (spec §13 M3, alongside `subs` and
+`eu`, needed to reach ≥5 sources so `merge.py`'s trimmed-mean branch is reachable).
+
+Spec names "CC-News RO" but no ready-made Romanian-only mirror exists on HF. Found
+`stanford-oval/ccnews` — a cleaned/deduplicated parquet mirror of the full CommonCrawl
+News crawl (2016-06–2024-06, ~600M articles, 100+ languages, sharded by crawl year, no
+per-language split) with a `language` column. Confirmed via the HF API (`language: ro`
+in the dataset card, `stanford-oval/ccnews` has no per-language config — same
+"filter client-side" pattern as the dataset's own README example).
+
+Ingester reuses `ingest_web.py`'s per-file/row-group checkpoint machinery, with one
+structural change: since most rows scanned are *not* Romanian, `rows_scanned` (resume
+position, every language) and `docs_matched`/`tokens_done` (Romanian only, what actually
+lands in `source_counts`) are now tracked as separate checkpoint fields — writing
+`rows_scanned` into `sources.total_docs` would silently claim CC-News's full multilingual
+row count as this source's document count, the same honest-denominator failure mode
+§3.2 exists to prevent, just on the docs axis instead of tokens.
+
+**Not verified end-to-end.** `--test` (scan first 200k rows of shard `2016_0000.parquet`)
+was still running after 20+ minutes on a single HTTPS connection when the session ended
+— no incremental progress signal available mid-fetch, because `pyarrow`'s
+`read_row_group` fetches an entire row group's referenced columns (`language`,
+`plain_text`) in one blocking call, and this dataset's shards are one 1M-row group each
+(unlike CulturaX's smaller groups, which is what gave `ingest_web.py`'s progress
+logging its granularity). Open items logged in `docs/BACKLOG.md`: confirm the language
+filter actually matches `ro` rows with sane text, and time real shard throughput before
+committing to an unattended run — if one shard takes 20+ minutes for two columns, 479
+shards could make `news` the slowest ingester yet for a fraction of `web`'s token count.
