@@ -146,3 +146,27 @@ real ingestion started), deleted the stale checkpoint file, and fixed the ingest
 and `ingest_wiki.py` have the same hardcoded-`CHECKPOINT` shape but were never smoke-
 tested against a scratch `--db` after going to production, so they never hit this; not
 touched, since both are already-completed one-time historical runs.
+
+## 2026-09-06 — M3 `news` real ingest launched; Ctrl+C fix; throughput resolved
+
+User started the real `build/ingest_news.py --resume` run by hand and couldn't stop it
+with Ctrl+C or Ctrl+D. Root cause: the SIGINT handler only set a flag and returned —
+PEP 475 auto-retries an interrupted blocking syscall unless the handler raises, so the
+flag was never actually able to break the process out of a stalled network read (the
+same kind of 20+-minute single-shard fetch logged above), and the flag-check inside the
+per-row loop never got a chance to run because the process hadn't reached the loop yet.
+Ctrl+D was a no-op for an unrelated reason — the script never reads stdin. By the time
+this was diagnosed the process had already died on its own; no data was lost (checkpoint
+showed `current_file_rows_scanned: 0`, i.e. it never got past the initial fetch).
+
+Fixed: a second signal now raises `SystemExit` instead of just re-flagging, forcing an
+immediate exit even mid-fetch; the first signal's graceful-flush-at-next-checkpoint
+behavior is unchanged.
+
+Confirmed no ingester was running, then launched `python -u build/ingest_news.py
+--resume` for real against `data/wrodfreq.db` and timed it live via the checkpoint file.
+**Throughput question from the entry above is resolved**: the earlier 20+ minute stall
+was a one-off (network/CDN, not the dataset) — two consecutive shards, one of them never
+touched by any prior test run (ruling out CDN-cache bias), each completed in exactly
+180s (3 min). At that rate the full 479-shard run is ~24h, not "multi-day" — reasonable
+for M3, left running.
