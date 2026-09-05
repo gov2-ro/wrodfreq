@@ -83,8 +83,17 @@ _shutdown = False
 
 def _handle_signal(sig, frame):
     global _shutdown
-    print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch",
-          flush=True)
+    if _shutdown:
+        # Second signal: force out even if stuck inside a blocking network
+        # read (a single shard's row-group fetch can take 20+ minutes here,
+        # unlike ingest_web.py's smaller groups). A handler that only sets a
+        # flag and returns lets PEP 475 auto-retry the interrupted syscall,
+        # so the first signal alone would never break out of that fetch.
+        print(f"\n[{datetime.now()}] second signal {sig} — forcing immediate exit "
+              f"(progress since the last checkpoint is lost)", flush=True)
+        raise SystemExit(1)
+    print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch "
+          f"(press again to force quit immediately, e.g. if stuck mid-fetch)", flush=True)
     _shutdown = True
 
 
