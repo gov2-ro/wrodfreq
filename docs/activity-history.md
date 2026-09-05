@@ -118,3 +118,31 @@ logging its granularity). Open items logged in `docs/BACKLOG.md`: confirm the la
 filter actually matches `ro` rows with sane text, and time real shard throughput before
 committing to an unattended run — if one shard takes 20+ minutes for two columns, 479
 shards could make `news` the slowest ingester yet for a fraction of `web`'s token count.
+
+## 2026-09-06 — `--test` confirmed sane; found and fixed a checkpoint/`--db` footgun
+
+Re-ran `build/ingest_news.py --test`. This time the same shard's column fetch took ~2
+minutes, not 20+ — no code changed between runs, so the earlier stall looks like a
+transient network/CDN issue rather than a property of the dataset; throughput on this
+source is evidently not reliable session to session, left open in `docs/BACKLOG.md`.
+The 200k-row scan found 2,037 `ro` docs (1.0–1.1% match rate) and 666,285 tokens; top
+words by occurrence (`de`, `a`, `în`, `și`, `la`, `din`, `cu`, `care`...) match the
+`wiki`/`web` shape, and `sources.total_docs` landed as the matched count (2,037), not
+the scanned count (200,000) — confirms the `rows_scanned`/`docs_matched` split actually
+works, not just compiles.
+
+**Bug found via this test, not by inspection:** `CHECKPOINT` is a module-level constant
+independent of `--db`. Two `--test` runs against a scratch `--db` (this one and the
+prior session's) had both written real-looking progress —"200,000 rows scanned, 2,037
+docs done" for `2016_0000.parquet`— into the *production* `data/checkpoints/
+news_checkpoint.json`, while the actual counted words only ever reached the throwaway
+scratch DB. Had the real run then been started with `--resume` (as the docstring's own
+restart loop does from the very first invocation), it would have silently skipped that
+shard's first 200k rows in the real database, having never actually counted them there.
+Confirmed no real `news` row exists in `data/wrodfreq.db` (this was caught before any
+real ingestion started), deleted the stale checkpoint file, and fixed the ingester so
+`--test` now writes to a sibling `news_checkpoint.test.json` instead of the shared path
+— matching what "no resume" in `--test`'s own help text already implied. `ingest_web.py`
+and `ingest_wiki.py` have the same hardcoded-`CHECKPOINT` shape but were never smoke-
+tested against a scratch `--db` after going to production, so they never hit this; not
+touched, since both are already-completed one-time historical runs.

@@ -314,6 +314,7 @@ def process_file(
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    global CHECKPOINT
     parser = argparse.ArgumentParser()
     parser.add_argument("--test", action="store_true",
                          help="Scan first 200k rows of shard 0 only, no resume")
@@ -322,6 +323,12 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     args = parser.parse_args()
+
+    if args.test:
+        # --test already means "no resume"; also keep it from writing progress
+        # into the real checkpoint, which a later --resume would trust even
+        # though this run's counts went into --db, not the production DB.
+        CHECKPOINT = CHECKPOINT.with_name(CHECKPOINT.stem + ".test.json")
 
     scan_limit = 200_000 if args.test else args.limit
 
