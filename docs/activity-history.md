@@ -170,3 +170,33 @@ was a one-off (network/CDN, not the dataset) — two consecutive shards, one of 
 touched by any prior test run (ruling out CDN-cache bias), each completed in exactly
 180s (3 min). At that rate the full 479-shard run is ~24h, not "multi-day" — reasonable
 for M3, left running.
+
+Handed the job to the user's own terminal (same reasoning as M2 CulturaX — a background
+job in this session dies if the session closes) with the restart-loop from the
+docstring. Stopped the session's copy first: `kill -TERM` on the wrapper shell PID exited
+the *shell*, but the actual Python process detached and kept running as an orphan,
+still writing to the real DB — had to find and `kill -TERM` the Python PID directly.
+Worth remembering: a background task's reported PID/exit here is the wrapper, not
+necessarily the real worker.
+
+## 2026-09-06 — Ctrl+C fix wasn't enough either; `os._exit()` instead
+
+User's own run hit a genuine multi-retry network failure on shard `2017_0029.parquet`
+(`ReadTimeout` / connection-reset, `huggingface_hub`'s own backoff visibly retrying
+5 times with growing sleeps) and repeated Ctrl+C did nothing — including after the
+"second signal force-exits" fix from earlier today. Diagnosis: that fix raises
+`SystemExit` on the second signal, but `huggingface_hub`'s retry/backoff machinery
+spins up extra threads (`ps -M` showed 3 threads on the stuck process), and CPython
+will not tear down the interpreter while any non-daemon thread is still alive — so the
+raised exception on the main thread had nowhere to go. Killed it directly from this
+session (`kill -9` on the PID, confirmed dead) since the user had no working way to
+stop it themselves; checkpoint was consistent (32/479 shards, 782,651 docs, 238.6M
+tokens — matches `sources.total_docs`/`total_tokens` exactly), nothing lost.
+
+Fixed by switching the second-signal path from `raise SystemExit(1)` to `os._exit(1)`
+— terminates the process immediately at the OS level, equivalent to self-inflicted
+SIGKILL, regardless of background threads or exception handling anywhere in the stack.
+This is now the second distinct way this ingester has gotten stuck past a first Ctrl+C
+(stalled fetch, then a retry-storm thread) — logged in `docs/BACKLOG.md` as still worth
+watching on the next long stretch, since `os._exit()` should be unconditional but hasn't
+been proven against a third failure mode yet. User resumes with `--resume` from shard 33.

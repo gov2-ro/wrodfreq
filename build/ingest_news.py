@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sqlite3
 import sys
@@ -86,12 +87,17 @@ def _handle_signal(sig, frame):
     if _shutdown:
         # Second signal: force out even if stuck inside a blocking network
         # read (a single shard's row-group fetch can take 20+ minutes here,
-        # unlike ingest_web.py's smaller groups). A handler that only sets a
-        # flag and returns lets PEP 475 auto-retry the interrupted syscall,
-        # so the first signal alone would never break out of that fetch.
+        # unlike ingest_web.py's smaller groups) or a retry-storm sleep loop
+        # in huggingface_hub's HTTP backoff. `raise SystemExit` alone isn't
+        # enough here — huggingface_hub's retry machinery runs background
+        # threads, and CPython won't tear down the process while a
+        # non-daemon thread is alive, so a raised exception on the main
+        # thread can sit there forever waiting for threads that never stop.
+        # os._exit() skips all of that: it terminates the process at the OS
+        # level immediately, like SIGKILL from inside the process itself.
         print(f"\n[{datetime.now()}] second signal {sig} — forcing immediate exit "
               f"(progress since the last checkpoint is lost)", flush=True)
-        raise SystemExit(1)
+        os._exit(1)
     print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch "
           f"(press again to force quit immediately, e.g. if stuck mid-fetch)", flush=True)
     _shutdown = True
