@@ -50,8 +50,38 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   it forever — changed to match `ingest_subs.py`'s convention (1 only for a
   real signal-interrupted stop).
 
-- [ ] M4 next: `build/merge.py` — trimmed mean across the 5-source panel into
-  `merged` (spec §8). This is the first stage that can actually validate
-  checks 2-5 (rank correlation vs `wordfreq`, hand-written monotone pairs,
-  DEX lemma coverage, the spread report) since they all need `merged` to
-  exist.
+- [x] `build/merge.py` — completed 2026-09-08 (M4, spec §7.4/§8): rebuilds
+  `merged` from scratch every run (atomic table-swap via `merged_new`, never
+  upserts) from the 5-source panel. 6,193,962 words written, 27,070,331
+  attested-but-below-floor words correctly omitted (not zeroed). `is_dex`
+  wired to oțios's vendored `inflected_forms.db` (587,535 of 6.19M merged
+  words matched), gracefully degrades to 0 if that db isn't reachable. Added
+  `wrodfreq.zipf.merge_zipf()` (the trim/mean itself, spec §8.2) with 6 new
+  unit tests, all passing (16/16 total in `tests/`).
+
+  **Two findings worth remembering, not bugs, both confirmed by direct query:**
+  1. `merged`'s own zipf for `de` is **7.71** — above the spec's literal 6.0–7.5
+     function-word band, same as the single-source finding from M1
+     (`docs/activity-history.md` 2026-08-18), but this time it's the *proper
+     5-source trimmed mean*, not a single skewed source. It lines up almost
+     exactly with `wordfreq`'s own real Romanian value (7.72, checked M1).
+     `validate.py`'s check 1 doesn't test `merged` yet (only per-source
+     `source_zipf`) — when it's extended to also check `merged`, the ceiling
+     needs to be ~8.0 there too, not the spec-literal 7.5, or this specific,
+     correctly-computed word will fail CI forever.
+  2. Spec §11 check 5's named example — "`dumneavoastră` high in `eu`, low in
+     `subs`" — **does not hold** in the real data: `eu`=4.71, `subs`=5.04
+     (subs is *higher*), `web`=5.15 is actually the high end, `wiki`=3.63 the
+     low end. Not a tokenizer artifact (checked the exact diacritic-correct
+     token directly) — a real finding that contradicts the spec's stated
+     prior. The rest of the top-by-spread list (checked `n_reliable=5` only,
+     to exclude single-source noise) *does* look like genuine register/topic
+     signal, not noise: `vrei` (informal "you want"), `alineatul`/`alineatele`
+     (legal "paragraph/subsection"), `isbn`, place names — so the mechanism is
+     sound, just this one named example was wrong.
+
+- [ ] M4 loose end: `validate.py` doesn't check `merged` at all yet (checks
+  2-5 — rank correlation vs `wordfreq`, ~50 hand-written monotone pairs, DEX
+  lemma coverage, the spread report). `merged` now exists, `wordfreq` is
+  reachable in oțios's venv (same precedent as M1), and `inflected_forms.db`
+  is reachable — nothing blocking this anymore. Natural next step after M4.

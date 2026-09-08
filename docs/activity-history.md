@@ -320,3 +320,68 @@ function words in-band for `eu` too (`de`=7.79, `și`=7.47, `la`=7.27, `un`=6.67
 
 **M3 is done** (spec §13 "done when the trimmed-mean branch in `merge.py` is actually
 reachable" — panel is now 5/5). Next: M4, `build/merge.py`.
+
+## 2026-09-08 — M4: `build/merge.py` — the panel is now one table
+
+`wrodfreq/zipf.py` gains `merge_zipf()` — the trim/mean itself (spec §8.2): >=5
+reliable sources drops max/min and means the rest, 1-4 gets a plain mean (trimming 3
+values to 1 is "pick the middle corpus" — `wordfreq`'s own Romanian is stuck with
+exactly this shape). Uses `statistics.mean` deliberately, not a hand-rolled sum: it
+sums via exact `Fraction` arithmetic internally, so the result is independent of the
+order the reliable-source rows were read in — load-bearing for `validate.py`'s
+idempotence check (§11.6). 6 new unit tests in `tests/test_zipf.py`, including one that
+shuffles the input and asserts the same result. 16/16 tests pass.
+
+`build/merge.py` (spec §7.4): rebuilds `merged` from scratch every run rather than
+upserting — a scratch `merged_new` table is populated, then swapped in via `DROP TABLE
+merged; ALTER TABLE merged_new RENAME TO merged` in one go, so a crash or interrupt
+mid-run leaves the previous `merged` (or none, on a first run) untouched rather than
+half-built. Realized `compute_zipf.py` already writes one `source_zipf` row per word
+per source regardless of reliability (zipf=NULL/reliable=0 below the floor) — meaning
+`n_attesting` and the reliable-zipf list are both derivable from `source_zipf` alone, no
+need to also touch `source_counts`. `source_zipf`'s `PRIMARY KEY (word, source_id)
+WITHOUT ROWID` clustering means a plain table scan already visits rows in (word,
+source_id) order — confirmed via `EXPLAIN QUERY PLAN` (`SCAN source_zipf`, no separate
+sort step) — so the whole merge is one streaming pass, grouping consecutive same-word
+rows in Python, no big in-memory dict over the ~33M distinct words involved.
+
+Filters to `period='contemporary' AND status='completed'` sources by design (spec
+§6.2's "a table that quietly averages 1890 and 2023 is lying about the present") — a
+no-op today since all five ingested sources are contemporary, but it means a future
+`books`/`ref` (CoRoLa) source won't silently enter the default merge. No opt-in flag
+added for those yet, since none exist to opt into — that's for when one actually lands.
+
+`is_dex` wired to oțios's vendored DEX paradigm map (`~/devbox/otios/data/processed/
+inflected_forms.db` — the "one data asset to reuse" per CLAUDE.md), read at build time
+only (not a runtime dependency of the shipped package — same precedent as M1's
+cross-check against oțios's installed `wordfreq`). Degrades to `is_dex=0` for everything
+if the file isn't reachable, printed as a warning, never a hard failure.
+
+**Ran it against the real 5-source panel**: 66s, 6,193,962 words written to `merged`,
+27,070,331 attested-but-below-floor words correctly *omitted* (not zeroed — 81% of all
+~33.3M distinct words ever attested across the panel never cleared any single source's
+reliability floor, mostly `web`'s long tail). `is_dex`: 587,535 of the 6.19M merged
+words matched one of 1,531,312 distinct DEX inflected forms. Top-20 by zipf are all
+exactly the expected function words, every one with `n_reliable=5`.
+
+**Two findings, both confirmed by direct query, neither a bug:**
+1. `merged`'s zipf for `de` is **7.71** — above the spec's literal 6.0-7.5 function-word
+   ceiling, matching the single-source finding from 2026-08-18 but now from the *proper
+   5-source trimmed mean*, and it lines up almost exactly with `wordfreq`'s own real
+   Romanian value (7.72). `validate.py`'s check 1 doesn't test `merged` yet — logged in
+   `docs/BACKLOG.md` that the ceiling needs to be ~8.0 there too when it is, or this
+   correctly-computed word fails CI forever.
+2. Spec §11 check 5 names a specific expected shape — "`dumneavoastră` high in `eu`, low
+   in `subs`" — and it **does not hold**: queried `source_zipf` directly, `eu`=4.71,
+   `subs`=5.04 (subs is higher, not lower), `web`=5.15 is the actual high end, `wiki`=3.63
+   the low end. Verified this isn't a diacritic/tokenizer artifact (queried the exact
+   correct token). The rest of the top-by-spread list, restricted to `n_reliable=5` to
+   exclude single-source noise, does look like genuine register/topic signal rather than
+   artifacts — `vrei` (informal "you want"), `alineatul`/`alineatele` (legal
+   "paragraph/subsection"), `isbn`, place names — so the *mechanism* is sound; this one
+   named example in the spec was just wrong.
+
+`validate.py` not re-run — its current checks (1, 6) only touch `sources`/`source_zipf`,
+unchanged by this stage, so nothing new to confirm there. Checks 2-5 all need `merged`
+and are now unblocked (logged in `docs/BACKLOG.md` as the natural next step) but weren't
+added in this session — scope was `merge.py` itself.
