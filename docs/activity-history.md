@@ -200,3 +200,28 @@ This is now the second distinct way this ingester has gotten stuck past a first 
 (stalled fetch, then a retry-storm thread) — logged in `docs/BACKLOG.md` as still worth
 watching on the next long stretch, since `os._exit()` should be unconditional but hasn't
 been proven against a third failure mode yet. User resumes with `--resume` from shard 33.
+
+## 2026-09-08 — M3: `news` ingest complete
+
+User's restart-loop finished all 479 shards: 2,186,239,880 tokens, 6,636,815 ro docs,
+2,943,510 unique words, 27.9h total (including the two stop/resume cycles from the
+Ctrl+C incidents above — no shard was double-counted, confirming the checkpoint's
+`rows_scanned`/`docs_matched` split held up under repeated kill/resume). `os._exit()`
+fix held for the rest of the run; no further stuck-process reports.
+
+`compute_zipf.py --source news` → floor=0.36 (expected — 2.19B tokens is CulturaX-scale,
+should land near `web`'s -0.67, not `wiki`'s 1.66). Top words by occurrence (`de`, `în`,
+`a`, `și`, `la`, `din`, `cu`, `că`, `o`, `mai`, `nu`, `un`, `au`, `se`, `este`, `fost`...)
+match `wiki`/`web`'s shape — no news-specific artifact (e.g. dateline boilerplate,
+"citește și", byline patterns) visible in the top 20, though that's only the top of the
+distribution; the spec's check-5 spread report is the place to look for register-bound
+words this source should be pulling up (formal/news vocabulary `wiki`/`web` under-weight).
+
+Ran `validate.py` across all three sources — 2/2 checks passed. Function words land
+in-band for `news` too (`de`=7.74, `și`=7.39, `la`=7.28, `un`=6.90, `cu`=7.08, all
+within 6.0–7.5), and idempotence holds (`compute_zipf.py` re-run across `wiki`/`web`/
+`news` produces the identical hash).
+
+Panel is now 3/5 toward M3's ≥5-source threshold. `subs` (OpenSubtitles RO) and `eu`
+(Europarl/DGT), both direct OPUS downloads rather than HF parquet, remain before
+`merge.py`'s trimmed-mean branch is reachable.
