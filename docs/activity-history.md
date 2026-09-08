@@ -264,3 +264,18 @@ average against OPUS's own ~2.5B-token count, full ingestion is an estimated ~32
 processing on top of the (already-cached) ~6 min download, dramatically shorter than
 `web`/`news` — planned to just run to completion in one sitting rather than needing the
 user's-own-terminal handoff those two long jobs required.
+
+Ran it to completion in this session (download already cached, so no re-download):
+371,104,866 lines, 1,936,897,280 tokens, 2,165,628 unique words, in 75.4 minutes —
+sustained rate settled at ~82-87k lines/s, well under the ~200k lines/s the `--test`
+run's coarse "in 1s" timing suggested; that estimate wasn't a reliable extrapolation
+basis, worth remembering next time a smoke test reports a sub-2-second duration.
+
+`compute_zipf.py --source subs` → floor=0.41. `validate.py` 2/2 across all four sources
+now (`wiki`/`web`/`news`/`subs`): function words in-band for `subs` too (`de`=7.46,
+`și`=7.17, `la`=7.09, `un`=6.96, `cu`=7.01), idempotence holds. Full-corpus top-20
+confirms the conversational signature from the smoke test at scale: `nu` (negation) at
+#2 — striking given it doesn't crack the top 10 in any written-register source — plus
+colloquial `asta`, `te`, `sunt` all present, none of which rank in `wiki`/`web`/`news`.
+
+Panel is now 4/5 toward M3's ≥5-source threshold. Only `eu` (Europarl/DGT) remains.
