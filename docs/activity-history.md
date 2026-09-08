@@ -225,3 +225,42 @@ within 6.0–7.5), and idempotence holds (`compute_zipf.py` re-run across `wiki`
 Panel is now 3/5 toward M3's ≥5-source threshold. `subs` (OpenSubtitles RO) and `eu`
 (Europarl/DGT), both direct OPUS downloads rather than HF parquet, remain before
 `merge.py`'s trimmed-mean branch is reachable.
+
+## 2026-09-08 — M3: `subs` scaffolded (OpenSubtitles RO via OPUS)
+
+`build/ingest_subs.py`. Spec's `subs` row calls OpenSubtitles the *safe* choice
+specifically (§6.2: oțios's own `subtitle_ro` was actually ~1/6th folk-music broadcast
+TV, not real dialogue) — resolved the actual download via OPUS's API
+(`opusapi?corpus=OpenSubtitles&source=ro&preprocessing=mono&version=latest`) rather
+than guessing a URL: v2024, a single 3.56 GB gzip file, one subtitle line per line,
+no per-file (movie) boundaries preserved in this export.
+
+Structurally different from `ingest_web.py`/`ingest_news.py`: one big file instead of
+many independent shards, so resume is two-stage — HTTP Range resumes the download
+itself (cheap, the object is immutable per pinned version), then *processing* resumes
+by re-decompressing from byte 0 and fast-forwarding (skip, don't tokenize) to the last
+checkpointed line. Pinned the resolved URL/version into the checkpoint on first run so
+a later `--resume` can't silently pick up a newer OPUS version mid-job. Reused
+`ingest_news.py`'s proven signal-handling shape (first signal flags for a clean flush,
+second calls `os._exit()`) rather than the plain flag-only version, per the lesson
+logged 2026-09-06.
+
+`documents` here counts *subtitle lines*, not the 427,889 distinct films OPUS's own
+metadata reports for this corpus — no companion `.ids` file ships with the mono export
+to reconstruct per-movie boundaries, so this source's `documents` column means something
+narrower than `wiki`/`web`/`news`'s per spec §14's "documents is an independence claim"
+caveat. Documented in the ingester's docstring and `sources.period_note`.
+
+Smoke-tested with `--test`: downloaded the real 3.56 GB file (cached at
+`data/raw/opensubtitles_ro.txt.gz`, reused freely across test/real runs since it's just
+source bytes, not progress — only the *processing* checkpoint needed the
+test/`--db`-isolation fix from `ingest_news.py`, applied here from the start) and
+processed the first 200k lines: 53,070 unique words, 1,305,317 tokens. Top 20 already
+shows a genuine conversational signature distinct from `wiki`/`web`/`news` — `să` at #2,
+`nu` at #4, colloquial `e` (vs `este`) and first-person `am` both present in the top 20,
+none of which rank there in the written-register sources. Processing ran at roughly
+200k lines/s (pure CPU, no network) — extrapolating from the observed ~6.5 tokens/line
+average against OPUS's own ~2.5B-token count, full ingestion is an estimated ~32 min of
+processing on top of the (already-cached) ~6 min download, dramatically shorter than
+`web`/`news` — planned to just run to completion in one sitting rather than needing the
+user's-own-terminal handoff those two long jobs required.
