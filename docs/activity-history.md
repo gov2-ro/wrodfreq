@@ -461,3 +461,84 @@ ever redistributing the lemma layer, logged in `docs/BACKLOG.md`.
 
 Next: extend `validate.py` with checks 2-5, now that both `merged` and `lemma_zipf`
 exist to check against.
+
+## 2026-09-08 — `validate.py`: all 6 spec checks, two genuine failures found
+
+Extended `validate.py` from checks 1+6 only to all six. Reused `wrodfreq.db.
+eligible_sources` and the `CROSS JOIN`-against-a-temp-table pattern from
+`build_lemma_layer.py` for every large word-set lookup here too (`_fetch_merged_zipf`)
+— both for portability (a plain `WHERE word IN (...)` with tens of thousands of
+placeholders risks SQLite's variable-count limit on stricter builds than this
+environment's, which happens to allow 250,000) and for speed.
+
+**Check 1 bug found and fixed**: it already checked `merged` once populated (not just
+per-source `source_zipf`), but with the spec-literal `ZIPF_HIGH=7.5` rather than the
+adjusted 8.0 ceiling the file's own comment already justified for the per-source
+fallback — so it was failing on `merged`'s `de`=7.71 the moment `merged` existed,
+exactly the finding logged under M4 above. Renamed the constant `ZIPF_HIGH_ADJUSTED`
+and applied it to both branches.
+
+**Check 2 (rank correlation vs `wordfreq`)**: implemented via `statistics.correlation
+(x, y, method="ranked")` — Python 3.10+ stdlib, no scipy/numpy dependency needed,
+handles tied ranks correctly (average-rank). wordfreq's full Romanian list (43,413
+words) fetched via a subprocess call into oțios's venv (same cross-reference precedent
+as M1's original `de`=7.72 check, now formalized as `load_wordfreq_ro()`).
+
+**Check 3 (monotone pairs)**: 59 hand-written (common, rarer) pairs. Cross-validated
+every pair against `wordfreq`'s independent Romanian zipf values before committing them
+— all 59 agree on direction (some of the "rarer" words aren't in wordfreq's list at
+all, zipf 0.0, which still confirms direction, just not the gap size). First draft used
+several multi-word phrases (`"cavitate bucală"`, `"instituție de învățământ"`) modeled
+loosely on spec's own examples — realized these can never match a `merged.word` row
+since the tokenizer only ever emits single tokens, replaced every one with a validated
+single-word equivalent (`orificiu`, `academie`, etc.) before the cross-check pass.
+
+**Check 4 (DEX coverage)**: excluded 118 of 121,895 DEX lemmas (frequency > 0.5) from
+the denominator first — abbreviations (`acad.`), Latin binomials (`acanthus
+longifolius`), foreign-diacritic loanwords (`müsli`) that can never match a single
+tokenizer output no matter the corpus. Checked reachability via the real `tokenize()`
+function (`tokenize(w) == [normalize(w)]`), not a duplicated regex — CLAUDE.md: "the
+tokenizer lives in exactly one module."
+
+**Check 6 (idempotence) extended** from stage 2 alone to stages 2-4: `merge.py` and
+`build_lemma_layer.py`'s `run`/`run_merge` functions imported directly and each rerun
+twice, hashing `merged`/`lemma_zipf`. This also means running `validate.py` now
+rebuilds both tables fresh from current `source_counts` as a side effect, not trusting
+whatever was left over from an earlier manual run — matches how check 6 already treated
+stage 2 before this change.
+
+Ran the full suite against the real 5-source panel. **3/5 checks pass** (1, 3, 6);
+checks 2 and 4 fail, both investigated rather than accepted at face value, both logged
+in detail in `docs/BACKLOG.md`:
+
+- Check 2, rho=0.86 (need >0.9), and it gets *worse* at higher wordfreq-zipf thresholds
+  (0.79 at zipf>=4.5) — ruling out low-frequency tail noise as the explanation. Traced
+  the biggest divergences to Romanian elision prefixes (`într`, `dintr`, `printr` —
+  normally `într-o`, `dintr-un`, hyphenated before a vowel): the tokenizer's
+  keep-internal-hyphens rule (deliberate, for genuine compounds) makes `într-o` one
+  token, fragmenting what should be one preposition's count across many separate
+  `într-X` compounds. Likely the same mechanism behind the `n-o`/`n-am`/`l-ai`-shaped
+  entries already seen high in M4's spread report. Not symmetric — the same rule is
+  *more* correct for real compounds/proper nouns (`cluj-napoca` staying one token), and
+  wordfreq's own data has a separate-looking issue (`ul`/`ului`/`uri`/`urile` as
+  free-standing "words" with implausibly high frequency — enclitic suffixes that never
+  stand alone in real Romanian, hinting at a subword-segmentation artifact on
+  wordfreq's side). Not fixed: a real fix means distinguishing elision hyphens from
+  compound hyphens and re-ingesting all five sources, well beyond this session's scope.
+
+- Check 4, 85.1% (need 95%). Spot-checked the missing sample: dominated by genuinely
+  obscure/archaic/technical DEX headwords (`abcede`, `abdomenoscop`,
+  `abstenționist`), not common words a working pipeline should have caught. Read
+  oțios's `extract_inflected_forms.py`: `lexeme.frequency` is copied verbatim from DEX
+  Online's own database column, not derived from any corpus — and `acanthus
+  longifolius` (a Latin botanical binomial) scoring 0.99 on that scale doesn't square
+  with "frequency" meaning real-world usage. Best guess, unconfirmed: DEX's own
+  `frequency` field measures something like lexicographic completeness rather than
+  usage, which would make 95% coverage from any realistic *contemporary* panel
+  structurally unreachable — a question for whoever understands DEX Online's schema
+  better, not something to silently work around by loosening the threshold.
+
+`3/5 checks passed` is `validate.py`'s honest current state — left both failures
+failing (nonzero exit) rather than adjusting the checks to pass, since both are real,
+substantive findings about the pipeline's current limits, not implementation bugs in
+the checks themselves.
