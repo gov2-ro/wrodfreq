@@ -62,20 +62,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from wrodfreq.db import DEFAULT_DB_PATH, connect, eligible_sources
 from wrodfreq.zipf import merge_zipf
 
 DEFAULT_DEX_DB = Path.home() / "devbox/otios/data/processed/inflected_forms.db"
 BATCH_SIZE = 200_000
-
-
-def eligible_sources(conn: sqlite3.Connection) -> list[str]:
-    """Contemporary, fully-ingested sources — the default merge's inputs (spec §6.2)."""
-    rows = conn.execute(
-        "SELECT source_id FROM sources WHERE period = 'contemporary' "
-        "AND status = 'completed' ORDER BY source_id"
-    ).fetchall()
-    return [r[0] for r in rows]
 
 
 def load_dex_forms(dex_db_path: Path | None) -> set[str]:

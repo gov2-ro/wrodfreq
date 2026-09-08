@@ -19,12 +19,17 @@ MIN_OCC_PER_SOURCE = 5
 MIN_SOURCES_TO_TRIM = 5
 
 
-def zipf_from_counts(occurrences: int, total_tokens: int) -> float:
-    """Zipf value for `occurrences` hits out of `total_tokens` alphabetic tokens."""
+def zipf_from_counts(occurrences: int | float, total_tokens: int) -> float:
+    """Zipf value for `occurrences` hits out of `total_tokens` alphabetic tokens.
+
+    `occurrences` is a float when called on a lemma's disambiguated,
+    share-split occurrence total (build_lemma_layer.py) rather than a raw
+    per-source surface-form count.
+    """
     return math.log10(occurrences / total_tokens * 1e9)
 
 
-def is_reliable(occurrences: int, min_occ: int = MIN_OCC_PER_SOURCE) -> bool:
+def is_reliable(occurrences: int | float, min_occ: int = MIN_OCC_PER_SOURCE) -> bool:
     """Whether a source's count for a word clears its reliability floor."""
     return occurrences >= min_occ
 

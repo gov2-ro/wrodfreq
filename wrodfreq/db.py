@@ -82,3 +82,14 @@ def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA_SQL)
     return conn
+
+
+# Shared by build/merge.py and build/build_lemma_layer.py, whose lemma-level
+# panel must be the same set of sources the surface-form merge used.
+def eligible_sources(conn: sqlite3.Connection) -> list[str]:
+    """Contemporary, fully-ingested sources — the default merge's inputs (spec §6.2)."""
+    rows = conn.execute(
+        "SELECT source_id FROM sources WHERE period = 'contemporary' "
+        "AND status = 'completed' ORDER BY source_id"
+    ).fetchall()
+    return [r[0] for r in rows]

@@ -385,3 +385,79 @@ exactly the expected function words, every one with `n_reliable=5`.
 unchanged by this stage, so nothing new to confirm there. Checks 2-5 all need `merged`
 and are now unblocked (logged in `docs/BACKLOG.md` as the natural next step) but weren't
 added in this session — scope was `merge.py` itself.
+
+## 2026-09-08 — M5: `build/build_lemma_layer.py`, the paradigm rollup
+
+`wrodfreq/lemma.py` (new module, mirroring `wrodfreq/zipf.py`'s pure-function shape):
+`aggregate_by_family()` and `aggregate_loose()`, ported from oțios's
+`validate_diachronic.py:386-498` per CLAUDE.md's "what to copy" table — the
+disambiguation math (ambiguous forms split, weighted by each claimant's own headword
+frequency in the same source; documents take the max across a lemma's forms,
+share-scaled, ported for fidelity even though `lemma_zipf`'s schema has no document
+column to put it in). One documented departure: oțios's original rounds the
+disambiguated count to an int before returning; kept as float straight through here,
+since rounding can flip a word across `MIN_OCC_PER_SOURCE=5` (round(4.6)=5, a false
+positive). 8 new unit tests in `tests/test_lemma.py` — including one built directly
+from spec §9's own `vești`/`veste`/`veșcă` example, and one confirming the
+loose-total-always->=-disambiguated-total invariant `family_ratio` depends on. 27/27
+tests pass across the repo.
+
+**Deliberately did not port oțios's `merge_panels()`** (raw-occurrence summing across
+corpora) — logged prominently in both this entry and the module docstrings, since it's
+the one place this stage could easily have silently reintroduced the exact problem
+`merge.py`'s trimmed mean exists to prevent: CulturaX is ~200x the next source, so
+summing raw lemma occurrences across corpora would reduce cross-source lemma merging to
+"CulturaX's opinion with a Romanian paradigm map attached." Instead, `build/
+build_lemma_layer.py` disambiguates per source (using that source's own headword
+frequencies as the split prior), converts each source's disambiguated lemma-occurrence
+total to *that source's own* zipf via the same `zipf_from_counts`/`MIN_OCC_PER_SOURCE`
+reliability floor every other count in this project uses, and only then combines the
+resulting per-source zipf values across sources via `merge_zipf()` — the identical
+trimmed-mean function `merge.py` uses for surface forms. A lemma is just a word whose
+count came from a paradigm roll-up instead of a single surface form; the cross-source
+algorithm doesn't need to know the difference. `family_ratio` (undivided/disambiguated)
+is computed the same way, in log-to-linear space: `10 ** (undivided_merged_zipf -
+disambiguated_merged_zipf)`, not a raw-count ratio, for the identical reason.
+
+Only words present in DEX's `form_lemma` paradigm map get a `lemma_zipf` row at all —
+everything else stays surface-form-only in `merged`. This is also what keeps the
+per-source fetch cheap: only ~1.5M distinct DEX forms are ever pulled from
+`source_counts`, not the full ~33M distinct surface forms across the panel.
+
+**Query performance bug found and fixed before the real run**: joining a ~1.5M-row temp
+table of DEX forms against `source_counts` with a plain `JOIN` made SQLite scan *all* of
+`source_counts` (tens of millions of rows across every source) and probe the small table
+per row — it had no selectivity estimate for the `source_id = ?` filter to know only a
+fraction of the table applied. `CROSS JOIN` in SQLite also means "don't reorder this
+join," forcing the small table to drive instead, turning each lookup into a direct hit
+on `source_counts`'s own `(word, source_id)` primary key. Measured 13x faster against
+the real database (26s → 2s for the `web` source alone). Same fix applied to the
+`zipf_headword` lookup against `merged`.
+
+**Ran against the real 5-source panel**: 1,531,312 distinct DEX forms loaded, 16s total,
+180,820 lemmas written to `lemma_zipf`. Verified idempotent (hashed two independent
+runs — identical). Checked the spec's own explicit motivating example directly:
+`înmărmuri` (317 raw surface hits, "reads as extinct") now has lemma zipf **1.67**,
+well above its bare citation-form zipf of **0.82** in `merged` — the paradigm rollup
+works. Notably *lower* than `înmărmurit`'s own merged zipf (2.23), which turned out not
+to be a bug but a second confirmation the disambiguation is working correctly:
+`înmărmurit` is genuinely ambiguous — DEX lists it as a separate adjective lexeme
+("astonished/petrified") in addition to being the verb's participle — so the split
+correctly divides that form's mass between the two senses rather than crediting the
+bare verb infinitive with all of it.
+
+**Finding, not a bug, worth remembering:** the "top 20 by family_ratio" report is
+dominated by values in the hundreds of thousands (`îmulți` at 189,768x), far past the
+spec's own stated examples (`tinereță` 298x, `veșcă` 938x). Investigated `voame`
+concretely: its DEX paradigm has 40 forms, including a malformed entry (`vomeți-` with
+a trailing hyphen) and a 3-way ambiguous share of `vom` with the auxiliary `vrea` —
+this looks like a genuine extraction artifact inherited from oțios's vendored
+`inflected_forms.db`, not a bug in the merge math here (confirmed the math does exactly
+what it should on this input — an obscure lemma with near-zero own evidence, sharing a
+form with something far more common, produces exactly this shape by design). Not fixed
+— out of scope for this stage, and not ours to silently patch without understanding the
+full extent of the issue in someone else's vendored data. Worth a closer look before
+ever redistributing the lemma layer, logged in `docs/BACKLOG.md`.
+
+Next: extend `validate.py` with checks 2-5, now that both `merged` and `lemma_zipf`
+exist to check against.

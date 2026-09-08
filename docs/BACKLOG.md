@@ -80,8 +80,45 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
      (legal "paragraph/subsection"), `isbn`, place names — so the mechanism is
      sound, just this one named example was wrong.
 
-- [ ] M4 loose end: `validate.py` doesn't check `merged` at all yet (checks
-  2-5 — rank correlation vs `wordfreq`, ~50 hand-written monotone pairs, DEX
-  lemma coverage, the spread report). `merged` now exists, `wordfreq` is
-  reachable in oțios's venv (same precedent as M1), and `inflected_forms.db`
-  is reachable — nothing blocking this anymore. Natural next step after M4.
+- [x] `build/build_lemma_layer.py` — completed 2026-09-08 (M5, spec §7.5/§9,
+  optional layer). Ports `aggregate_by_family()`/`aggregate_loose()` from
+  oțios into new `wrodfreq/lemma.py` (pure functions, 8 unit tests — 27/27
+  total across the repo now). Deliberately does **not** port oțios's
+  cross-corpus `merge_panels()` (raw-occurrence summing across corpora) —
+  that would let CulturaX dominate lemma-level results the same way it would
+  have dominated surface forms without the trim. Instead: disambiguate per
+  source, convert to that source's own zipf, then cross-source merge via the
+  same `merge_zipf()` `merge.py` already uses for surface forms — a lemma is
+  just a word whose count came from a paradigm roll-up. Query performance
+  fix found while building this: a plain `JOIN` against a ~1.5M-row temp
+  table of DEX forms made SQLite scan all of `source_counts` (tens of
+  millions of rows) and probe the small table per row, since it had no
+  selectivity estimate for `source_id`; `CROSS JOIN` forces the small table
+  to drive instead, turning each lookup into a direct primary-key hit —
+  13x faster measured against the real db (26s → 2s per source). Ran
+  against the real 5-source panel: 180,820 lemmas written in 16s, verified
+  idempotent (hashed two independent runs, identical). The spec's own
+  motivating example checks out: `înmărmuri` (the verb) rolls up from a
+  bare 0.82 zipf (citation form alone) to 1.67 once its whole paradigm is
+  counted — correctly *less* than `înmărmurit`'s own merged zipf (2.23)
+  because that participle is genuinely ambiguous (also a separate DEX
+  adjective lexeme) and the split correctly divides credit rather than
+  crediting the verb sense in full.
+
+  **Finding, not a bug:** the "top 20 by family_ratio" printout is
+  dominated by values in the hundreds-of-thousands (vs. spec's own stated
+  examples topping out at 938×) and several implausible-looking "lemmas"
+  (`voame`, `îmulți`). Traced concretely: `voame`'s DEX paradigm has 40
+  forms including malformed entries (`vomeți-` with a trailing hyphen) and
+  shares `vom` with the auxiliary `vrea` (3-way ambiguous) — this looks like
+  a genuine extraction artifact in oțios's vendored `inflected_forms.db`,
+  not a bug in the merge math (confirmed the math is doing exactly what
+  it's supposed to on this input). Worth a closer look before ever
+  redistributing the lemma layer, separate from the licence question
+  CLAUDE.md already flags.
+
+- [ ] `validate.py` doesn't check `merged` or `lemma_zipf` at all yet
+  (checks 2-5 — rank correlation vs `wordfreq`, ~50 hand-written monotone
+  pairs, DEX lemma coverage, the spread report). Both tables now exist,
+  `wordfreq` is reachable in oțios's venv (M1 precedent) — nothing blocking
+  this. Up next.
