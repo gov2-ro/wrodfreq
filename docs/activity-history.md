@@ -279,3 +279,44 @@ confirms the conversational signature from the smoke test at scale: `nu` (negati
 colloquial `asta`, `te`, `sunt` all present, none of which rank in `wiki`/`web`/`news`.
 
 Panel is now 4/5 toward M3's ≥5-source threshold. Only `eu` (Europarl/DGT) remains.
+
+## 2026-09-08 — M3 complete: `eu` scaffolded and ingested, panel at 5/5
+
+`build/ingest_eu.py`. Spec's `eu` row names two corpora, "Europarl / DGT", as one
+source — generalized `ingest_subs.py`'s single-big-file download/resume shape over a
+short fixed list of two named parts instead of one file, rolling both into one
+`source_id='eu'`. Resolved both via the OPUS API the same way as `subs`: Europarl v8
+(10.8M OPUS-tokens, spoken-then-transcribed parliamentary proceedings) and DGT v2021
+(92.6M OPUS-tokens, written EU legal/legislative translation memory) — distinct genres,
+both bureaucratic-formal, both tiny (20 MB + 139 MB compressed) compared to the other
+four sources.
+
+Caught two real bugs while writing this, before any run touched real data:
+1. `ensure_source_row()` was only called after the full parts loop, but each part's
+   periodic `flush()` does `UPDATE sources ... WHERE source_id=?` — against a row that
+   doesn't exist yet, which SQLite silently no-ops rather than erroring. Every
+   in-progress total during processing would have been lost, and if interrupted
+   mid-part the `sources` row would never even get created despite `source_counts`
+   already holding real data — an inconsistent state that would confuse `validate.py`
+   and `status.py`. Fixed by creating the row (placeholder `period_note`, updated for
+   real at the end) before the parts loop starts.
+2. The exit code returned 1 (failure) whenever any part wasn't fully exhausted — which
+   includes a deliberate `--test`/`--limit` stop, not just a real interruption. Under
+   the restart-loop's `[ $? -eq 0 ] && break`, a `--limit`-bounded run would look
+   identical to a crash and get retried forever. Changed to `ingest_subs.py`'s
+   convention: exit 1 only for an actual signal-interrupted stop.
+
+`--test` smoke-tested clean (20k lines/part): 33,322 unique words, top-20 already
+showing the expected formal-register shift from `subs` — `pentru`/`care`/`sau`/`este`
+present, `nu` down at #15 (vs #2 in `subs`). Real run finished in well under a minute
+(both files already cached from `--test`, so no re-download): 4,938,644 lines,
+84,415,957 tokens, 275,156 unique words. `articolul` ("the article," as in a legal
+article) landing at #18 by occurrence is about as clean a legal-register tell as this
+table will produce. `compute_zipf.py --source eu` → floor=1.77.
+
+`validate.py` 2/2 across the full 5-source panel (`wiki`/`web`/`news`/`subs`/`eu`):
+function words in-band for `eu` too (`de`=7.79, `și`=7.47, `la`=7.27, `un`=6.67,
+`cu`=7.13), idempotence holds across all five.
+
+**M3 is done** (spec §13 "done when the trimmed-mean branch in `merge.py` is actually
+reachable" — panel is now 5/5). Next: M4, `build/merge.py`.
