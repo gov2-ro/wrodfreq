@@ -14,10 +14,9 @@ All six spec checks:
      Skipped (not failed) if the DEX db isn't reachable.
   5. Per-source disagreement report — not pass/fail, a printed top-100 by
      `spread`, for a human to read.
-  6. Idempotence — re-running stages 2-4 (compute_zipf, merge,
-     build_lemma_layer) on unchanged `source_counts` must produce
-     byte-identical output at every stage. (Stage 5, build_package.py,
-     joins this once it exists — spec's "stages 2-5".)
+  6. Idempotence — re-running stages 2-5 (compute_zipf, merge,
+     build_lemma_layer, build_package) on unchanged `source_counts` must
+     produce byte-identical output at every stage.
 
 Checks 2 and 4 both cross-reference oțios's environment at build time (its
 installed `wordfreq` package, its vendored `inflected_forms.db`) — this is
@@ -44,6 +43,7 @@ from wrodfreq.tokenizer import normalize, tokenize
 from compute_zipf import compute_all
 from merge import DEFAULT_DEX_DB, load_dex_forms, run_merge
 from build_lemma_layer import load_form_lemma, run as run_lemma_layer
+from build_package import build_payloads
 
 FUNCTION_WORDS = ["de", "și", "la", "un", "cu"]
 ZIPF_LOW, ZIPF_HIGH = 6.0, 7.5
@@ -367,6 +367,10 @@ def _lemma_zipf_hash(conn: sqlite3.Connection) -> str:
     return hashlib.sha256(repr(rows).encode()).hexdigest()
 
 
+def _package_hash(surface_payload: dict, by_source_payload: dict) -> str:
+    return hashlib.sha256(repr((surface_payload, by_source_payload)).encode()).hexdigest()
+
+
 def check_idempotence(conn: sqlite3.Connection, dex_db_path: Path) -> bool:
     """Check 6: re-running stages 2-4 on unchanged source_counts must be
     byte-identical at every stage. Also leaves merged/lemma_zipf freshly
@@ -406,6 +410,15 @@ def check_idempotence(conn: sqlite3.Connection, dex_db_path: Path) -> bool:
               f"({h_a[:12]}... vs {h_b[:12]}...)")
     else:
         print(f"  build_lemma_layer: SKIPPED — DEX db not found at {dex_db_path}")
+
+    surface_a, by_source_a = build_payloads(conn)
+    h_a = _package_hash(surface_a, by_source_a)
+    surface_b, by_source_b = build_payloads(conn)
+    h_b = _package_hash(surface_b, by_source_b)
+    stage_ok = h_a == h_b
+    ok = stage_ok and ok
+    print(f"  build_package: {'ok' if stage_ok else 'FAIL — package payload changed on re-run'} "
+          f"({h_a[:12]}... vs {h_b[:12]}...)")
 
     return ok
 

@@ -184,3 +184,52 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
      worth resolving what `frequency` actually means before deciding
      whether to recalibrate the check or add an explicitly non-contemporary
      source to close the gap.
+
+- [x] `build/build_package.py` + the real API (`wrodfreq/__init__.py`,
+  `wrodfreq/_surface.py`) — completed 2026-09-09 (M6, spec §7.6/§10). This
+  was the actual missing piece: `wrodfreq/__init__.py` had nothing but
+  `__version__` before this — none of `zipf_frequency`/`word_frequency`/
+  `top_n_list`/`frequency_detail`/`lemma_frequency`/`by_source`/
+  `build_info` existed. Verified against a real, isolated `pip install` of
+  the built wheel in a throwaway venv (not just "works when run from the
+  repo") — this caught a real packaging bug: Hatchling's default file
+  selection is git-tracked files only, and the data files are deliberately
+  gitignored, so the first wheel build silently shipped with *no* data
+  files at all. Fixed via `[tool.hatch.build] artifacts = [...]` — has to
+  be at the top level, not just under `targets.wheel`, since `uv build`/
+  `pip wheel` build the wheel from the sdist and the sdist needs the same
+  override.
+
+  Ships two files, not one: `ro_surface.msgpack.xz` (27.8 MB — words, zipf,
+  n_reliable, n_attesting, spread) and `ro_by_source.msgpack.xz` (9.1 MB —
+  the per-source breakdown, lazy-loaded only if `by_source()` is actually
+  called). A single combined file measured 38.7 MB, over spec's 30 MB
+  target for "the surface table"; splitting off `by_source` — the one
+  extension spec explicitly calls out as "clearly marked as such" — both
+  hit the target and matched that framing rather than being an arbitrary
+  size-driven cut. Also quantized zipf/spread to centizipf ints instead of
+  Python floats (msgpack packs a float as 8 bytes regardless of precision;
+  spec's own "round to 2 decimals, it costs real bytes" reasoning taken to
+  its actual conclusion) — this alone took the core file from 31.1 MB to
+  29.2 MB, the only thing that got it under target. One real bug caught
+  before shipping: the by-source file originally duplicated the full
+  6.19M-word list a second time (for self-containment) — measured 27.6 MB
+  instead of the 9.5 MB it should've been; fixed by making it positional,
+  aligned to the surface file's word order, with a `word_count` field as a
+  cheap cross-file integrity check instead of a second copy of the words.
+
+  **`is_dex` and the lemma layer are deliberately NOT shipped.** CLAUDE.md
+  flags the DEX Online licence question as unresolved before
+  *redistributing* anything derived from it, and is_dex (an aggregate of
+  ~587k booleans over merged's own words) would let anyone reconstruct a
+  large fraction of DEX's own headword list by cross-referencing which
+  shipped words have it set — a real redistribution question, not a
+  hypothetical one. This wasn't decided here (not an engineering call to
+  make unilaterally); `lemma_frequency()` just degrades gracefully (0.0,
+  matching `zipf_frequency`'s own unknown-word contract) until it is.
+
+  `build/validate.py`'s check 6 extended once more: stage 5
+  (`build_package.py`) now joins stages 2-4, verified idempotent by
+  rebuilding its payload twice and hashing. 16 new tests in
+  `tests/test_api.py` against a small synthetic fixture (not the real
+  ~37 MB build artifact) — 43/43 total across the repo now.

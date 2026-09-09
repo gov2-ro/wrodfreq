@@ -542,3 +542,94 @@ in detail in `docs/BACKLOG.md`:
 failing (nonzero exit) rather than adjusting the checks to pass, since both are real,
 substantive findings about the pipeline's current limits, not implementation bugs in
 the checks themselves.
+
+## 2026-09-09 — M6: the actual package. `wrodfreq/__init__.py` had nothing in it
+
+Checked before starting: `wrodfreq/__init__.py` contained exactly `__version__ = "0.1.0"`.
+None of the API spec §10.1 promises — `zipf_frequency`, `word_frequency`, `top_n_list`,
+`frequency_detail`, `lemma_frequency`, `by_source`, `build_info` — existed anywhere.
+Five milestones of ingesting, merging, and validating a table nobody could actually
+import and use. Built `build/build_package.py` (spec §7.6) plus the real API
+(`wrodfreq/__init__.py`, new `wrodfreq/_surface.py` lazy loader).
+
+**Sizing the data file took real measurement, not a guess.** First attempt — one file,
+words + zipf + n_reliable + n_attesting + spread + by_source, plain Python floats —
+came in at 39.6 MB, over spec's 30 MB target for "the surface table". Two changes, both
+measured before/after rather than assumed to help:
+
+- Quantized zipf and spread to centizipf ints (`round(zipf * 100)`) instead of leaving
+  them as Python floats — msgpack packs a float as 8 bytes regardless of the value's
+  actual precision, and spec already says to round to 2 decimals "because the third
+  decimal is noise and it costs real bytes across ~2M entries"; quantizing takes that
+  reasoning to its actual conclusion instead of rounding then repacking as a float
+  anyway. Core table: 193.4 MB packed / 31.1 MB compressed unquantized → 97.7 MB packed
+  / 29.2 MB compressed quantized.
+- Split `by_source` into its own file (`ro_by_source.msgpack.xz`), lazy-loaded only if
+  `by_source()` is actually called. Combined-and-quantized still measured 38.7 MB, over
+  target; `by_source` alone measured 9.5 MB, and it's also the one extension spec
+  explicitly calls "clearly marked as such" — splitting it off both hits the target and
+  matches that framing, not an arbitrary cut chosen just to hit a number.
+
+Final: `ro_surface.msgpack.xz` 27.8 MB, `ro_by_source.msgpack.xz` 9.1 MB (a touch smaller
+than the isolated measurement since the surface file's own header/word list isn't
+duplicated in it — see next paragraph).
+
+**Bug caught mid-build, not after:** the first working version of `ro_by_source.msgpack.xz`
+carried its own copy of the full 6.19M-word list (for "self-containment") and came out at
+27.6 MB instead of the ~9.5 MB measured for `by_source` data alone — the word list itself
+was almost the whole cost. Fixed by making the file purely positional (row *i* of
+`by_source` corresponds to word *i* of the surface file's own word list, both built from
+the same `words` array in one run) with a `word_count` field as a cheap integrity check
+(the API refuses to use a mismatched pair) rather than a second copy of 6.19M strings.
+
+**`is_dex` and the lemma layer are deliberately not in either file.** Same unresolved
+DEX Online licensing question CLAUDE.md already flags — and unlike `merge.py`'s `is_dex`
+column (a private research field in `wrodfreq.db`, not redistributed to `pip install`
+users), *shipping* an aggregate of ~587k per-word booleans derived from DEX's own
+headword list is a real redistribution question, not a hypothetical one: anyone could
+reconstruct a large fraction of DEX's own word list by cross-referencing which shipped
+words have it set. Not a decision to make unilaterally here. `lemma_frequency()` reflects
+that honestly — always 0.0 for now, degrading the same way `zipf_frequency` does for an
+unknown word, not crashing or pretending the layer exists.
+
+**Caught a real packaging bug by actually testing the built wheel, not just the API in
+the repo.** Built the wheel (`uv build`) and inspected it directly: it shipped with
+*zero* files under `wrodfreq/data/` — Hatchling's default file selection is git-tracked
+files only, and the data files are deliberately gitignored (large rebuildable binaries).
+`pip install`ing that wheel would have raised `FileNotFoundError` on the very first call.
+Fixed with `[tool.hatch.build] artifacts = ["wrodfreq/data/*.msgpack.xz"]` — has to sit
+at the top level of `[tool.hatch.build]`, not just under `targets.wheel`, since `uv
+build` (and `pip wheel`) build the wheel *from* the sdist, and the sdist needs the same
+override or there's nothing in the intermediate archive for the wheel step to include
+regardless of its own setting. Verified the actual fix by rebuilding and inspecting the
+wheel's file listing directly, twice — once wrong, once right — not by reasoning about
+what Hatchling's docs say should happen.
+
+**Verified against a real, isolated install**, not just imports from within the repo:
+built the wheel, `pip install`ed it into a throwaway venv with no access to this
+checkout or the SQLite database, and called every public function from there —
+`zipf_frequency`, `top_n_list`, `frequency_detail`, `by_source`, `lemma_frequency`,
+`build_info` all worked correctly against the shipped data alone.
+
+`build/validate.py`'s check 6 extended once more: stage 5 (`build_package.py`) now
+joins stages 2-4, verified idempotent by building its payload twice in one process and
+hashing (also spot-checked separately: two full `build_package.py` runs a few minutes
+apart produced byte-identical files on disk). `3/5 checks passed`, unchanged — this
+stage doesn't touch the two known-failing checks.
+
+16 new tests in `tests/test_api.py`, against a small synthetic fixture (four made-up
+words, not the real ~37 MB build artifact) via `monkeypatch` on `_surface.SURFACE_PATH`/
+`BY_SOURCE_PATH` — covers the unknown-word contracts (`0.0` vs `None`), the `minimum`
+floor, `by_source`'s lazy second-file load, and an `ascii_only` edge case worth calling
+out: a naive "over-fetch by a fixed multiplier then filter" implementation of
+`top_n_list(n, ascii_only=True)` would under-return, since Romanian diacritics are
+common even in high-frequency words (`și`, `să`, `nu`-shaped words all carry them) —
+implemented as a proper cached filter over the full sorted list instead, and the test
+constructs a fixture specifically to catch the under-return case (an ASCII word ranked
+below a diacritic one that outranks it). 43/43 tests pass repo-wide.
+
+M6 is functionally done: `pip install`-and-use works end-to-end. Remaining before a
+real release: the two `validate.py` failures (checks 2 and 4, both understood, neither
+fixed), the DEX licensing question (blocks `is_dex` and the whole lemma layer from ever
+shipping), and M7 (exposing `n_reliable` back to oțios — the only coupling between the
+two repos).
