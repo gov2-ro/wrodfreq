@@ -633,3 +633,73 @@ real release: the two `validate.py` failures (checks 2 and 4, both understood, n
 fixed), the DEX licensing question (blocks `is_dex` and the whole lemma layer from ever
 shipping), and M7 (exposing `n_reliable` back to oțios — the only coupling between the
 two repos).
+
+## 2026-09-09 — M7: feeding `n_reliable` back to oțios
+
+Spec §13's last milestone is explicit that the change lands in the *other* repo: "Expose
+`n_reliable` to oțios as a corroboration signal. That is a change in the oțios repo, not
+this one, and it is the only coupling between the two." Read oțios's `CLAUDE.md` and
+`validate_with_wordfreq.py` first — oțios already has a standalone screen doing almost
+this exact thing with the *original* `wordfreq` package, disconnected on 2026-08-11
+because it resolved almost nothing: "measured over 60,000 candidates, 99.6% score
+exactly 0.00" (wordfreq's Romanian coverage is too thin). That's the whole reason
+wRodfreq exists (`docs/wordfreq-recipe.md` §4), so before writing anything, measured
+whether it actually fixes that specific problem rather than assuming spec's design intent
+would pan out: a random 2,000-word sample of oțios's real 18,271-word shortlist against
+`wrodfreq.zipf_frequency()` came back only 27.8% zero-resolution. Worth building.
+
+Wrote `~/devbox/otios/validate_with_wrodfreq.py`, mirroring `validate_with_wordfreq.py`'s
+exact CLI/IO contract (same default input, same three tiers, same `--threshold`/
+`--upper-threshold` defaults for continuity) so the two screens are directly comparable,
+but powered by wRodfreq instead: no `simplemma` lemmatization step (wRodfreq's own
+surface-form coverage — ~6.2M words vs. wordfreq's ~43k — makes it less necessary, and
+sidesteps a documented simplemma failure mode noted in the old script's own docstring:
+picking the wrong homograph lemma, `secret`→`secreta`, `dor`→`durea`). Kept the same
+paradigm-max rollup pattern (`paradigm_zipf` → `paradigm_detail`) over DEX's own
+`inflected_forms.db`, since "is any form of this word in current use" is still the right
+question even with better resolution — just now also carries whichever form's zipf won
+the max its full `n_reliable`/`n_attesting`/`spread` too, not just its number.
+
+New columns `wordfreq` could never provide, added straight from `frequency_detail()`:
+`n_reliable`, `n_attesting`, `n_sources`, `spread` — literally spec §8.3's corroboration
+count, corpus by corpus, not an average. This is the actual M7 deliverable; everything
+else in the script is scaffolding to get real candidate words in front of it.
+
+Installed wRodfreq into oțios's `.venv` as an editable dependency (`uv pip install -e
+../gov2/wrodfreq`) and added `-e ../gov2/wrodfreq` to `requirements.txt` — editable so
+oțios always sees wRodfreq's current data as the panel grows, not a frozen wheel snapshot
+that needs manual reinstalling. Documented the whole thing in oțios's own `CLAUDE.md`,
+right below the existing `wordfreq`-screen note, so a future reader sees both side by
+side and understands why the second one exists.
+
+Ran it for real on the full 145,358-candidate curated list (not just the sample): 25.7%
+zero-Zipf, matching the sample closely. **Deliberately staged as a standalone CSV output,
+not wired into `make_shortlist.py`'s scoring or `ui.db`** — same status
+`dcr_definitions.csv`/`clre_dcr_definitions.csv` already had in that repo before anyone
+decided how to use them (oțios's own established convention for a new signal). How much
+a 5-corpus corroboration count should actually move the shortlist's score, if at all, is
+a real editorial decision with UI/threshold implications (oțios's own `CLAUDE.md` is
+explicit that its score vs. hide-flags split was tuned by measurement, e.g. the
+`rare_in_use` upper threshold's 3.5-not-4.5 story) — not something to decide unilaterally
+inside what's supposed to be a data-exposure milestone.
+
+**Found unrelated pre-existing uncommitted state while checking `git status` in oțios,
+not caused by this work**: `docs/wordfreq-recipe.md` showed as deleted from the working
+tree. Checked before touching anything — `git log` shows it last modified 2026-08-11, a
+month before this session, and nothing in this session ever wrote to or read that path
+(only wRodfreq's own identically-named doc, in the other repo, was touched). Left it
+exactly as found; committed only `CLAUDE.md`, `requirements.txt`, and
+`validate_with_wrodfreq.py` by explicit path rather than `git add -A`, so the unrelated
+deletion stays isolated and visible for whoever left it there to resolve on their own
+terms. Committed as oțios `10b9883`.
+
+Also confirms — not just hedges — the check-4 finding from two entries above:
+`Lexeme.frequency` is a literary-prominence score, not a usage frequency, per oțios's own
+`CLAUDE.md` ("`zapciu` ... is 0.96 while `internet` is 0.88"). Check 4's 95%-of-DEX-lemmas
+target is unreachable by any realistic contemporary panel by construction, not just in
+current practice.
+
+Per spec §13, M1 through M7 are now all complete. What's left is entirely open questions,
+not milestones: the two `validate.py` failures (checks 2 and 4), the DEX licensing
+decision, and however oțios's maintainer decides to weigh the new corroboration signal
+into its own scoring.

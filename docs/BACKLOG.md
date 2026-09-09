@@ -175,15 +175,19 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
      DEX Online's own database column, not derived from any corpus — and
      `acanthus longifolius` (a Latin botanical binomial) scoring 0.99 on
      that same scale is hard to square with "frequency" meaning real-world
-     usage frequency. Best guess, not confirmed: DEX's own `frequency`
-     measures something like lexicographic completeness/dictionary-edition
-     coverage, not corpus usage — which would mean this check's 95% target
-     may be unreachable by any realistic *contemporary* corpus panel,
-     regardless of vocabulary-filter correctness (spec's stated failure
-     mode). Left failing rather than silently loosening the threshold —
-     worth resolving what `frequency` actually means before deciding
-     whether to recalibrate the check or add an explicitly non-contemporary
-     source to close the gap.
+     usage frequency. **Confirmed 2026-09-09** (was a hedged guess before
+     this): oțios's own `CLAUDE.md` states it outright — "`Lexeme.frequency`
+     is not a usage frequency. It behaves like a literary-prominence score:
+     `zapciu` (an obsolete Ottoman-era tax collector) is 0.96 while
+     `internet` is 0.88." So this check's 95% target is unreachable by any
+     realistic *contemporary* corpus panel by construction, not just in
+     practice — it's measuring "well established in the written canon", and
+     a panel of web/news/subtitles/Wikipedia/EU text is deliberately
+     contemporary (spec §6.2). Left failing rather than silently loosening
+     the threshold; the fix is recalibrating what check 4 tests against
+     (perhaps a different DEX field, or a different target percentage —
+     both are now decisions with a real answer to reason from, not blocked
+     on confirming this).
 
 - [x] `build/build_package.py` + the real API (`wrodfreq/__init__.py`,
   `wrodfreq/_surface.py`) — completed 2026-09-09 (M6, spec §7.6/§10). This
@@ -233,3 +237,29 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   rebuilding its payload twice and hashing. 16 new tests in
   `tests/test_api.py` against a small synthetic fixture (not the real
   ~37 MB build artifact) — 43/43 total across the repo now.
+
+- [x] M7 — completed 2026-09-09, spec §13: "expose `n_reliable` to oțios as
+  a corroboration signal... a change in the oțios repo, not this one." Done
+  there: `~/devbox/otios/validate_with_wrodfreq.py` (commit `10b9883`),
+  installed wRodfreq into oțios's venv as an editable dependency
+  (`-e ../gov2/wrodfreq` in its `requirements.txt`). Measured before
+  building anything, not assumed: a random 2,000-word sample of oțios's
+  real 18,271-word shortlist against `wrodfreq.zipf_frequency()` came back
+  27.8% zero-resolution, vs. the old `wordfreq`-based screen's documented
+  99.6% (oțios's own `CLAUDE.md`, 2026-08-11) — confirmed the whole
+  exercise was worth doing before writing the integration. Full run on the
+  real 145,358-candidate list: 25.7% zero. Staged as a standalone CSV
+  output (same status `dcr_definitions.csv` had before anyone decided how
+  to use it) — deliberately **not** wired into `make_shortlist.py`'s
+  scoring or `ui.db`; that's a real decision about how much weight a
+  5-corpus corroboration count should carry against oțios's existing
+  historical-attestation-driven score, not made unilaterally in this
+  session. Found unrelated pre-existing uncommitted state while there
+  (`docs/wordfreq-recipe.md` deleted from oțios's working tree, last
+  touched 2026-08-11 — predates this session, nothing to do with this
+  work) — left untouched, committed only the files this task actually
+  changed rather than `git add -A`.
+
+  This also **confirmed** (not just hedged) the check-4 finding above:
+  oțios's `CLAUDE.md` states outright that `Lexeme.frequency` is a
+  literary-prominence score, not usage frequency.
