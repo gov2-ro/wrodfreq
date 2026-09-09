@@ -703,3 +703,14 @@ Per spec §13, M1 through M7 are now all complete. What's left is entirely open 
 not milestones: the two `validate.py` failures (checks 2 and 4), the DEX licensing
 decision, and however oțios's maintainer decides to weigh the new corroboration signal
 into its own scoring.
+
+## 2026-09-09 — Session close: all seven milestones done, handoff written
+
+End-of-session checkpoint. `docs/NEXT-SESSION.md` now holds the consolidated open
+questions and next steps for picking this back up cold — everything below is already
+covered in more detail across this file's M1–M7 entries and `docs/BACKLOG.md`; this is
+just the wrap-up pointer.
+
+Noticed but not acted on this session, since it wasn't what was asked: `README.md`'s
+first line still says "Status: spec only, no code yet" — stale since M1. Left for
+whoever picks this up next; flagged in `docs/NEXT-SESSION.md`.
