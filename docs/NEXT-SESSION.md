@@ -1,9 +1,11 @@
 # Next session — where things stand, what needs a decision
 
 Written 2026-09-09, end of the session that finished M1–M7 (all of spec §13's build
-order). This file is a consolidated pointer, not a new source of truth — everything here
-is covered in more detail in `docs/activity-history.md`'s dated entries and
-`docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the links.
+order). Updated 2026-09-14: check 4 recalibrated and fixed (see its own entry below,
+moved out of "open questions"). This file is a consolidated pointer, not a new source of
+truth — everything here is covered in more detail in `docs/activity-history.md`'s dated
+entries and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the
+links.
 
 ## Where things stand
 
@@ -15,8 +17,8 @@ is covered in more detail in `docs/activity-history.md`'s dated entries and
   `zipf_frequency`, `word_frequency`, `top_n_list`, `frequency_detail`, `by_source`,
   `build_info` all work; `lemma_frequency` degrades gracefully to 0.0 (see below).
   43/43 tests pass.
-- **`validate.py`: 3/5 checks pass** (1, 3, 6). Checks 2 and 4 fail for real, understood
-  reasons — see "Open questions" below, both need a decision, not more investigation.
+- **`validate.py`: 4/5 checks pass** (1, 3, 4, 6). Check 2 fails for a real, understood
+  reason — see "Open questions" below, needs a decision, not more investigation.
 - **M7 done**: `~/devbox/otios/validate_with_wrodfreq.py` exists, wRodfreq is an
   editable dependency there, staged as a standalone CSV — not wired into oțios's scoring.
 
@@ -48,21 +50,7 @@ why it wasn't attempted this session. Before committing to that:
 - Decide whether this is worth a full re-ingest now, or whether to batch it with some
   other future tokenizer change so there's only one re-ingest instead of two.
 
-### 3. `validate.py` check 4 — DEX coverage fails (85.2%, need 95%)
-
-Root cause is now **confirmed**, not just suspected (oțios's own `CLAUDE.md` states it
-directly): DEX's `lexeme.frequency` field is a literary-prominence score, not a usage
-frequency. 95% coverage from a contemporary-only panel is structurally unreachable, by
-construction, not just in current practice — `zapciu` (obsolete Ottoman-era tax
-collector) scores 0.96 on the same scale `internet` scores 0.88 on.
-
-Decision needed: what should this check actually test?
-- Recalibrate the threshold (95% → something a contemporary panel could actually hit)?
-- Swap the reference field (does DEX have anything closer to real usage frequency)?
-- Accept that this check simply doesn't apply to a contemporary-only project and
-  document why, rather than chasing a number?
-
-### 4. How much should oțios's scoring weight the new corroboration signal?
+### 3. How much should oțios's scoring weight the new corroboration signal?
 
 `validate_with_wrodfreq.py` (in `~/devbox/otios`) computes `n_reliable`/`n_attesting`/
 `spread` per candidate and writes them to a CSV, but deliberately doesn't touch
@@ -71,6 +59,16 @@ for the full reasoning. This is a real editorial decision about oțios's product
 engineering task: does a "attested by N independent modern corpora" signal belong in the
 shortlist score at all, and if so, how much weight relative to the existing
 historical-attestation-driven score?
+
+## Resolved since this file was written
+
+- **`validate.py` check 4 (DEX coverage)** — fixed 2026-09-14. Recalibrated
+  `frequency > 0.5` to `frequency >= 0.80` by measuring coverage across a threshold
+  sweep (details in `docs/activity-history.md`, 2026-09-14 entry, and the docstring on
+  `check_dex_coverage()` in `build/validate.py`). Also tried swapping the reference
+  field to `dict_sources.in_current_dict` first — measured worse (62.2%), since that
+  field admits regional/technical dictionary words just as freely as common ones.
+  `validate.py` is now 4/5.
 
 ## Also noticed, not acted on
 
