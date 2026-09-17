@@ -9,14 +9,14 @@ pins the one implementation's behavior instead.
 
 from pathlib import Path
 
-from wrodfreq.tokenizer import normalize, tokenize
+from wrodfreq.tokenizer import _split_elisions, normalize, tokenize
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "tokenizer_fixture.txt").read_text()
 
 EXPECTED_TOKENS = [
     "țara", "aceasta", "are", "de", "milioane", "de", "oameni", "și", "un",
-    "laptop", "pe", "cap", "de", "locuitor", "dintr-un", "motiv", "sau",
-    "altul", "m-a", "întrebat", "ce", "e", "cu", "covid", "și", "cu",
+    "laptop", "pe", "cap", "de", "locuitor", "dintr", "un", "motiv", "sau",
+    "altul", "m", "a", "întrebat", "ce", "e", "cu", "covid", "și", "cu",
     "selfie-urile", "de", "pe", "internet",
 ]
 
@@ -54,8 +54,74 @@ def test_tokenize_open_vocabulary_neologisms():
     ]
 
 
-def test_tokenize_keeps_internal_hyphen_and_apostrophe():
-    assert tokenize("dintr-un s-a m-a") == ["dintr-un", "s-a", "m-a"]
+def test_tokenize_splits_elision_hyphens():
+    # spec finding 2026-09-08 (docs/BACKLOG.md): a hyphen-preserving tokenizer
+    # fragments într-o/s-a/m-a's true frequency across many rare compound
+    # variants instead of crediting într/o/s/a/m — see wrodfreq/tokenizer.py's
+    # module docstring for the full elision-vs-compound reasoning.
+    assert tokenize("dintr-un s-a m-a") == ["dintr", "un", "s", "a", "m", "a"]
+
+
+def test_tokenize_keeps_genuine_compound_hyphens():
+    # compounds, proper nouns, and loanword+suffix constructions never match
+    # either elision set and must stay joined — splitting "site-ul" would
+    # manufacture a nonsense "ul" token.
+    assert tokenize("mass-media site-ul cluj-napoca bine-crescut") == [
+        "mass-media", "site-ul", "cluj-napoca", "bine-crescut",
+    ]
+
+
+def test_split_elisions_apostrophe_preserved():
+    # apostrophes are a separate mechanism (stress marks, elided vowels like
+    # "dintr-o", "s-a") from the hyphen-splitting logic — unaffected by it.
+    assert _split_elisions("n-am") == ["n", "am"]
+
+
+def test_split_elisions_left_side_match():
+    assert _split_elisions("într-o") == ["într", "o"]
+    assert _split_elisions("dintr-un") == ["dintr", "un"]
+
+
+def test_split_elisions_right_side_match():
+    # the left-hand side here is an open-class verb participle/imperative,
+    # not a clitic — only the right-hand clitic pronoun triggers the split.
+    assert _split_elisions("avut-o") == ["avut", "o"]
+    assert _split_elisions("du-te") == ["du", "te"]
+    assert _split_elisions("spune-mi") == ["spune", "mi"]
+
+
+def test_split_elisions_recurses_through_chains():
+    assert _split_elisions("s-a-ntâmplat") == ["s", "a", "ntâmplat"]
+
+
+def test_split_elisions_leaves_compounds_alone():
+    assert _split_elisions("mass-media") == ["mass-media"]
+    assert _split_elisions("prim-ministru") == ["prim-ministru"]
+    assert _split_elisions("on-line") == ["on-line"]
+
+
+def test_split_elisions_leaves_loanword_suffix_alone():
+    # "-ul"/"-ului"/"-uri" are noun-inflection suffixes, not clitic pronouns
+    # — splitting "site-ul" would leave a bare "ul" that isn't a real word.
+    assert _split_elisions("site-ul") == ["site-ul"]
+    assert _split_elisions("show-ului") == ["show-ului"]
+    assert _split_elisions("ong-uri") == ["ong-uri"]
+
+
+def test_split_elisions_excludes_roman_numeral_ordinals():
+    # "a II-a" ("the 2nd"), "al XII-lea" ("the 12th") are ordinals, not
+    # elision, even though "-a"/"-lea" match the right-side elision set.
+    assert _split_elisions("ii-a") == ["ii-a"]
+    assert _split_elisions("xii-lea") == ["xii-lea"]
+    assert _split_elisions("x-lea") == ["x-lea"]
+
+
+def test_split_elisions_roman_lookalike_single_letters_still_split():
+    # v/l/i/m/c are also valid Roman numerals, but the elision reading
+    # dominates in real text for these (v-a, l-a are common; "the 5th"
+    # written bare as "v-a" is not) — the ordinal guard doesn't apply to them.
+    assert _split_elisions("v-a") == ["v", "a"]
+    assert _split_elisions("l-a") == ["l", "a"]
 
 
 def test_tokenize_drops_bare_punctuation():
