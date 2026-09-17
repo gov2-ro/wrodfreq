@@ -1,11 +1,13 @@
 # Next session — where things stand, what needs a decision
 
 Written 2026-09-09, end of the session that finished M1–M7 (all of spec §13's build
-order). Updated 2026-09-14: check 4 recalibrated and fixed (see its own entry below,
-moved out of "open questions"). This file is a consolidated pointer, not a new source of
-truth — everything here is covered in more detail in `docs/activity-history.md`'s dated
-entries and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the
-links.
+order). Updated 2026-09-14: check 4 recalibrated and fixed. Updated 2026-09-17: README
+rewritten, DEX licensing discussed (still open, deferred by choice). Resolved items move
+to "Resolved since this file was written" below rather than being deleted, so the
+history of what's already been decided doesn't get lost. This file is a consolidated
+pointer, not a new source of truth — everything here is covered in more detail in
+`docs/activity-history.md`'s dated entries and `docs/BACKLOG.md`'s checklist. Read this
+first to reorient, then follow the links.
 
 ## Where things stand
 
@@ -69,14 +71,19 @@ historical-attestation-driven score?
   field to `dict_sources.in_current_dict` first — measured worse (62.2%), since that
   field admits regional/technical dictionary words just as freely as common ones.
   `validate.py` is now 4/5.
+- **`README.md` was stale** — fixed 2026-09-17. Rewritten against the real current
+  state: real usage examples (each verified against the running package), the Roadmap's
+  seven milestones as actual completed results instead of aspirational "done when"
+  framing, and the lemma-layer overclaim fixed (it's built and validated, not shipped).
 
 ## Also noticed, not acted on
 
-- **`README.md` is stale.** Its own first line still says "Status: spec only, no code
-  yet" — hasn't been touched since M1, and none of M2–M7 are reflected anywhere in it.
-  Given the package now actually works, this is worth a real pass (usage examples,
-  `build_info()`, the two extension functions, current corpus panel stats), not just a
-  one-line status fix.
+- **DEX Online licensing — discussed 2026-09-17, still deferred, not resolved.** Talked
+  through what's actually being redistributed (a plain word list + numbers, not the
+  dictionary text itself) and agreed this reads as low real risk, not a blocker — worth
+  reaching out to dexonline.ro directly for a straight answer rather than treating it as
+  a landmine. Nobody has sent that outreach yet; still gates `is_dex` and the lemma
+  layer exactly as before.
 - **Unrelated pre-existing issue found in oțios, not caused by this work**:
   `~/devbox/otios/docs/wordfreq-recipe.md` shows as deleted in that repo's working tree,
   uncommitted, last touched 2026-08-11 (a month before this session). Left exactly as
