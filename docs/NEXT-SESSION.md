@@ -1,13 +1,15 @@
 # Next session — where things stand, what needs a decision
 
 Written 2026-09-09, end of the session that finished M1–M7 (all of spec §13's build
-order). Updated 2026-09-14: check 4 recalibrated and fixed. Updated 2026-09-17: README
-rewritten, DEX licensing discussed (still open, deferred by choice). Resolved items move
-to "Resolved since this file was written" below rather than being deleted, so the
-history of what's already been decided doesn't get lost. This file is a consolidated
-pointer, not a new source of truth — everything here is covered in more detail in
-`docs/activity-history.md`'s dated entries and `docs/BACKLOG.md`'s checklist. Read this
-first to reorient, then follow the links.
+order). Updated 2026-09-14: check 4 recalibrated and fixed. Updated 2026-09-17 (x2):
+README rewritten, DEX licensing discussed (still open, deferred by choice); the
+tokenizer/elision fix for check 2 landed and is verified correct, but check 2 itself
+stays open — a second, separate hyphenation phenomenon turned out to be the bigger
+driver (see below). Resolved items move to "Resolved since this file was written" below
+rather than being deleted, so the history of what's already been decided doesn't get
+lost. This file is a consolidated pointer, not a new source of truth — everything here
+is covered in more detail in `docs/activity-history.md`'s dated entries and
+`docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the links.
 
 ## Where things stand
 
@@ -38,19 +40,31 @@ thing stopping it from shipping is not knowing whether redistributing values der
 from DEX Online's own headword list is OK. Need: an actual answer about DEX Online's
 terms, from you or whoever understands that license, not an engineering workaround.
 
-### 2. `validate.py` check 2 — rank correlation fails (rho=0.86, need >0.9)
+### 2. `validate.py` check 2 — rank correlation still fails (rho=0.863, need >0.9)
 
-Root cause is understood (docs/activity-history.md, 2026-09-08): the tokenizer's
-keep-internal-hyphens rule makes Romanian elision constructions (`într-o`, `dintr-un`,
-`n-am`, `s-a`) into single compound tokens instead of splitting them, fragmenting what
-should be one common word's count across many rarer variants.
+The clitic-elision half of this is **fixed and verified** (2026-09-17) — no re-ingest
+needed after all, `build/migrate_elisions.py` corrected `source_counts` in place, and
+`într`/`dintr`/`printr`/`a`/`o`/`am`/`au`/`ai` all now match `wordfreq` closely
+(`într`: 3.45 → 6.05, vs. wordfreq's 6.08). But rho barely moved (0.860 → 0.863) — a
+**second, separate, comparably-sized phenomenon** turned out to dominate the gap:
+Romanian combining-form compound adjectives (`austro-ungar`, `socio-economic`,
+`daco-roman`, `anti-terorist`). `wordfreq` splits these too, giving prefixes like
+`anti`/`socio`/`daco`/`pseudo` real standalone frequency; ours still keeps each
+compound joined.
 
-**The fix requires re-ingesting all five sources from scratch** (hours to days) — that's
-why it wasn't attempted this session. Before committing to that:
-- Decide the actual splitting rule (which hyphens are elision vs. genuine compounds like
-  `bine-cunoscut` or proper nouns like `Cluj-Napoca`, which should probably stay joined).
-- Decide whether this is worth a full re-ingest now, or whether to batch it with some
-  other future tokenizer change so there's only one re-ingest instead of two.
+Measured, not yet decided: 7,395 distinct prefixes appear in >=15 distinct compounds
+each in `merged` — genuine, well-established combining forms (`anti`, `non`, `auto`,
+`pre`, `super`, `micro`, `neo`, `bio`, plus historical/ethnic ones like `daco`/`austro`)
+mixed in with clearly spurious single-letter noise (`d`, `t`, `b`, `p`, `c`, `x`) and
+questionable cases (`al`, `se`) from a huge, noisy web corpus. Unlike clitics (a small
+closed grammatical set), this list is much larger and much noisier — a blanket rule
+risks manufacturing nonsense splits at real scale. Decision needed:
+- Is this worth pursuing at all, given check 2 might not reach 0.9 even after fixing it
+  (part of the remaining gap — `ul`/`ului`/`uri`/`urile` — looks like a subword artifact
+  on `wordfreq`'s own side, not something fixable here)?
+- If yes: how to build a trustworthy allowlist/rule out of 7,395 noisy candidates
+  without vetting each one by hand?
+- The same in-place-migration technique (no re-ingest) would apply here too.
 
 ### 3. How much should oțios's scoring weight the new corroboration signal?
 
