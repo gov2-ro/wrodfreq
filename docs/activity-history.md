@@ -751,3 +751,38 @@ Ran the full `validate.py` suite to confirm: **4/5 checks now pass** (1, 3, 4, 6
 check 2 (rank correlation, the tokenizer/elision issue) remains, and that one still
 needs the decision logged in `docs/NEXT-SESSION.md` (a full re-ingest, not something to
 attempt casually). 43/43 tests still pass; check 4's fix didn't touch any other stage.
+
+## 2026-09-17 — README rewritten: it still said "spec only, no code yet"
+
+Talked through the DEX licensing question first — user's read is low real risk (a plain
+word list and some numbers, not the actual dictionary text), worth just asking
+dexonline.ro directly rather than treating it as a blocker. Deferred, not resolved;
+still open in `docs/NEXT-SESSION.md`.
+
+Asked what to tackle next; picked the stale `README.md` over the tokenizer/elision fix
+(needs a full re-ingest) or helping design oțios's scoring integration (an editorial
+call, not an engineering one).
+
+Rewrote it top to bottom against the real, current state rather than patching the
+M1-era text: replaced the "spec only, no code yet" banner with real usage examples
+(`zipf_frequency`, `word_frequency`, `top_n_list`, `frequency_detail`, `by_source`) —
+every example's output verified against the actual running package before being written
+down, not composed from memory. Fixed both the RO and EN (ASD-STE100) sections' claim
+that the lemma layer is already available — it computes and validates 180,820 lemmas
+but isn't shipped pending the DEX licensing question, and the README was overclaiming
+by omission. Rewrote the Roadmap's seven milestones from their original aspirational
+"done when" framing to actual completed results (real token counts, real coverage
+numbers) — all now checked off, with a closing pointer to `docs/NEXT-SESSION.md` for
+what's still open. Added `docs/NEXT-SESSION.md` to the Docs list (existed since 2026-09-09,
+was never linked). Added a closing paragraph on the M7 coupling now that it's real
+(`validate_with_wrodfreq.py` in oțios), with its own measured numbers (25.7% vs. 99.6%
+zero-signal).
+
+Caught two smaller issues while proofreading rather than after: the opening line said
+"shipped as `pip install wrodfreq`" one paragraph above a status line admitting it isn't
+on PyPI yet — reworded to "designed to ship as". And the build instructions ran `pytest`
+without first installing the `dev` extra that provides it (`uv pip install -e .` alone
+doesn't pull in `pytest`) — fixed to `-e ".[dev]"`, and actually ran the corrected
+install + test sequence, plus separately verified the "43 tests pass with no data files
+at all" claim by moving `wrodfreq/data/` aside and re-running, rather than assuming the
+synthetic-fixture tests in `test_api.py` were the only ones that mattered.
