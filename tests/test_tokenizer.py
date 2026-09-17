@@ -7,7 +7,10 @@ structurally guaranteed rather than something to assert at runtime — this file
 pins the one implementation's behavior instead.
 """
 
+import random
 from pathlib import Path
+
+import pytest
 
 from wrodfreq.tokenizer import _split_elisions, normalize, tokenize
 
@@ -130,3 +133,75 @@ def test_tokenize_drops_bare_punctuation():
 
 def test_tokenize_fixture_paragraph():
     assert tokenize(FIXTURE) == EXPECTED_TOKENS
+
+
+# ---------------------------------------------------------------------------
+# Doubled hyphens are a dash, not an internal hyphen (fixed 2026-09-18)
+# ---------------------------------------------------------------------------
+#
+# Found by reading validate.py's check-5 spread report by eye, which is what
+# that check is for: `baden-w` in the top-100 by spread was the thread. The
+# token regex's inner class permits consecutive hyphens, so dash typography
+# (overwhelmingly subtitles) reached _split_elisions as a single token and
+# the naive `.split("-")` turned the resulting empty parts into malformed
+# tokens — including an empty-string token that shipped in the data file,
+# where zipf_frequency('') answered 2.34 instead of wordfreq's 0.0.
+
+DASH_CASES = [
+    ("într--o", ["într", "o"]),          # elision + dash: was ["într", "", "o"]
+    ("n--am", ["n", "am"]),
+    ("într--adevăr", ["într", "adevăr"]),  # was ["într", "-adevăr"]
+    ("spune--mi", ["spune", "mi"]),        # was ["spune-", "mi"]
+    ("eu--eu", ["eu", "eu"]),              # subtitle repetition, not a compound
+    ("sunt--sunt", ["sunt", "sunt"]),
+    ("spider--man", ["spider", "man"]),
+    ("a---b", ["a", "b"]),                 # any run of hyphens, not just two
+    ("xn--urlaub-in-rumnien", ["xn", "urlaub-in-rumnien"]),
+]
+
+
+@pytest.mark.parametrize("text,expected", DASH_CASES)
+def test_doubled_hyphen_is_a_token_boundary(text, expected):
+    assert tokenize(text) == expected
+
+
+def test_dash_handling_does_not_disturb_single_hyphens():
+    # The cases the 2026-09-17 elision rule exists to get right must be
+    # untouched by the dash fix: compounds stay joined, elisions still split.
+    assert tokenize("mass-media") == ["mass-media"]
+    assert tokenize("site-ul") == ["site-ul"]
+    assert tokenize("cluj-napoca") == ["cluj-napoca"]
+    assert tokenize("într-o") == ["într", "o"]
+    assert tokenize("avut-o") == ["avut", "o"]
+    assert tokenize("al ii-a") == ["al", "ii-a"]
+
+
+# The invariants the malformed rows in `merged` violated. Asserted over every
+# fixture in this module plus adversarial hyphen/apostrophe soup, because a
+# token that is empty or hyphen-edged is not a word in any corpus and must
+# never reach `source_counts` — one did, and shipped.
+_INVARIANT_INPUTS = [text for text, _ in DASH_CASES] + [
+    "", "-", "--", "---", "-a", "a-", "-a-", "a-b", "a--b-", "--a--",
+    "într-o casă -- și n--am spus", "s--a dus", "-- -- --", "a'-'b",
+    "mass--media", "prim---ministru", "d--na", "l--a", "i--a", "x--lea",
+    "Într--O CASĂ", "ăîâșț--ăîâșț", "'-'", "a-'-b", "spune-mi -- acum",
+]
+
+
+@pytest.mark.parametrize("text", _INVARIANT_INPUTS)
+def test_tokenizer_output_invariants(text):
+    for token in tokenize(text):
+        assert token, f"empty token from {text!r}"
+        assert not token.startswith("-"), f"leading hyphen in {token!r} from {text!r}"
+        assert not token.endswith("-"), f"trailing hyphen in {token!r} from {text!r}"
+        assert "--" not in token, f"doubled hyphen in {token!r} from {text!r}"
+
+
+def test_tokenizer_output_invariants_on_random_hyphen_soup():
+    rng = random.Random(0)
+    alphabet = "abcăîșț-'"
+    for _ in range(3000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 14)))
+        for token in tokenize(text):
+            assert token and not token.startswith("-") and not token.endswith("-")
+            assert "--" not in token, (text, token)

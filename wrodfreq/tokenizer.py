@@ -35,6 +35,19 @@ ordinal "the 5th") splits like an elision would — rare enough in practice that
 the dominant elision reading is worth keeping for the other ~99% of `v-`/`l-`
 words. Multi-letter Roman numerals (`ii-a`, `xii-lea`) and the bare numeral `x`
 don't share this ambiguity and are excluded explicitly — see `_is_roman_ordinal`.
+
+**Doubled hyphens are a dash, not an internal hyphen** (fixed 2026-09-18). The
+token regex's inner class permits consecutive hyphens, so `eu--eu`, `spune--mi`
+and `într--adevăr` all arrive at `_split_elisions` as single tokens — dash
+typography, overwhelmingly from subtitles. Splitting those naively on `-`
+yields empty parts, and the original rule turned those into malformed tokens:
+an empty-string token from `într--o`, a leading-hyphen `-adevăr`, a trailing-
+hyphen `spune-`. The empty one reached the shipped table, where
+`zipf_frequency('')` answered 2.34 instead of wordfreq's 0.0. A run of 2+
+hyphens is now treated as a token boundary, so `eu--eu` counts as two `eu` (not
+the nonsense compound `eu-eu` that collapsing the run to one hyphen would
+manufacture), and the tokenizer's output invariants — no empty token, no token
+with a leading, trailing or doubled hyphen — hold for every input.
 """
 
 from __future__ import annotations
@@ -89,9 +102,18 @@ def _split_elisions(word: str) -> list[str]:
     if "-" not in word:
         return [word]
     parts = word.split("-")
-    result = [parts[0]]
-    for i in range(1, len(parts)):
-        prev, cur = parts[i - 1], parts[i]
+    result: list[str] = []
+    for i, cur in enumerate(parts):
+        if not cur:
+            # A run of two or more hyphens is a dash, not an internal hyphen —
+            # skip the empty part it splits into and let the next real part
+            # start a fresh token. See the `--` note in the module docstring.
+            continue
+        prev = parts[i - 1] if i else ""
+        if not prev:
+            # Word-initial, or the first part after a dash: nothing to join to.
+            result.append(cur)
+            continue
         splits_here = prev in _ELISION_LEFT or (
             cur in _ELISION_RIGHT and not _is_roman_ordinal(prev, cur)
         )

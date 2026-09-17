@@ -364,3 +364,107 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   `ciolacu`, `migranți`, `fotovoltaice`, `pensiilor`) — which is the
   five-source contemporary panel doing exactly its job, given wordfreq's
   Romanian predates most of it.
+
+- [x] **Tokenizer emitted empty and hyphen-edged tokens; one shipped.** Fixed
+  in code 2026-09-18 (`wrodfreq/tokenizer.py`), **data cleanup still open —
+  see the next entry.** Found by reading check 5's top-100-by-spread report
+  by eye, which is exactly what that check exists for: `baden-w` sitting in
+  the list was the thread to pull.
+
+  `_TOKEN_RE`'s inner class `[a-zăâîșț\-']*` permits *consecutive* hyphens, so
+  dash typography (`eu--eu`, `spune--mi`, `într--adevăr` — overwhelmingly
+  subtitles) arrived at `_split_elisions` as a single token. Its naive
+  `word.split("-")` turned the resulting empty parts into malformed output:
+
+  | input | was | now |
+  |---|---|---|
+  | `într--o` | `['într', '', 'o']` | `['într', 'o']` |
+  | `într--adevăr` | `['într', '-adevăr']` | `['într', 'adevăr']` |
+  | `spune--mi` | `['spune-', 'mi']` | `['spune', 'mi']` |
+  | `eu--eu` | `['eu--eu']` | `['eu', 'eu']` |
+
+  **The empty-string token reached the shipped data file**, where
+  `zipf_frequency('')` answered **2.34** — wordfreq returns `0.0`, so this
+  was a live violation of the drop-in API contract, not just an untidy row.
+
+  A run of 2+ hyphens is now a token boundary. Deliberately *not* collapsed
+  to a single hyphen instead: the dominant real cases are subtitle
+  repetitions (`eu--eu`, `sunt--sunt`, `este--este`, `noi--noi`, `tu--tu`,
+  `doar--doar`), and collapsing would manufacture the nonsense compound
+  `eu-eu`. The single-hyphen elision rules from 2026-09-17 are untouched and
+  re-asserted (`mass-media`, `site-ul`, `cluj-napoca` stay joined; `într-o`,
+  `avut-o` still split; `ii-a` still guarded).
+
+  Tokenizer tests went 10 → 55. The new ones assert the *invariants* the bad
+  rows violated — no empty token, no leading/trailing/doubled hyphen — over
+  every fixture, adversarial hyphen/apostrophe soup, and 3,000 random
+  hyphen-alphabet strings. 130/130 passing repo-wide.
+
+- [ ] **Data cleanup for the doubled-hyphen fix — `source_counts` still holds
+  the malformed rows.** The tokenizer no longer produces them, but
+  `data/wrodfreq.db` was built before the fix, so code and data currently
+  disagree. Not yet run, because it rewrites the 4 GB db and the shipped
+  package and there is only ~10 GiB free (a full backup copy is 4 GB — the
+  2026-09-17 elision migration hit the same constraint and deleted its backup
+  after verifying).
+
+  Scope, measured:
+
+  | class | rows in `source_counts` | rows in `merged` |
+  |---|---|---|
+  | empty string | 3 | 1 |
+  | leading hyphen (`-adevăr`) | 1,140 | 61 |
+  | trailing hyphen (`spune-`) | 4,596 | 198 |
+  | doubled hyphen (`eu--eu`) | 39,274 | 980 |
+
+  **43,137 rows, 75,442 occurrences out of 28,217,964,718 — 0.00027% of the
+  panel.** No Zipf value of any real word moves measurably; the whole point
+  is removing ~1,240 nonsense entries from `merged` and fixing
+  `zipf_frequency('')`. Every affected entry sits below Zipf 2.1 except the
+  empty string itself.
+
+  Approach: the `build/migrate_elisions.py` pattern, not a re-ingest —
+  occurrence counts are exact per token, so re-running the *new*
+  `_split_elisions` over just these 43,137 stored words and redistributing
+  their counts reproduces what a corrected tokenizer would have counted from
+  scratch. Carries the same accepted approximation as that migration
+  (`documents` becomes a slight upper bound for split words). Then re-run
+  stages 2-5 and `validate.py`. Note `_split_elisions('')` returns `['']` via
+  its no-hyphen early return, so the migration must drop empty words
+  explicitly rather than rely on it.
+
+- [ ] **Non-Romanian diacritics split foreign words mid-token.** Mechanism
+  confirmed, magnitude bounded, deliberately not chased — logged so the next
+  person doesn't rediscover it from scratch. `_TOKEN_RE`'s character class is
+  `[a-zăâîșț]`, so any other diacritic terminates the match and restarts it:
+
+      Düsseldorf -> ['d', 'sseldorf']      Köln   -> ['k', 'ln']
+      Zürich     -> ['z', 'rich']          François -> ['fran', 'ois']
+      Baden-Württemberg -> ['baden-w', 'rttemberg']
+
+  The tail fragments are real, reliable rows in `merged` (`nchen` 3.55,
+  `rich` 3.48, `sseldorf` 2.94, `rttemberg` 2.93, `rnberg` 2.84 — most
+  attested by all 5 sources), so this is genuine pollution, not a one-corpus
+  artifact. **But the leading fragments, which is where the damage would
+  actually show, are not detectably inflated**: our single-letter Zipf values
+  track wordfreq's own within ~0.05 for the common letters (`a` 7.43/7.45,
+  `s` 6.50/6.49, `l` 6.17/6.18, `m` 5.82/5.84, `v` 5.51/5.50). Single letters
+  are genuinely frequent in Romanian text and wordfreq agrees with us about
+  how frequent.
+
+  So the cost is spurious *low-frequency* entries, not corrupted
+  high-frequency ones — the opposite of the elision bug, which wrecked `într`
+  at 3.45 vs its true 6.05. Widening the class to cover Latin-1 diacritics
+  would fix the fragments but changes what counts as a Romanian token, which
+  is a spec §3 decision and needs the same measure-first treatment the
+  combining-form question got.
+
+- [ ] **`zipf_frequency` does not tokenize its argument; wordfreq's does.** Noted
+  2026-09-18, no action taken — flagging a real difference in the drop-in
+  contract (spec §10.1), not asserting it is wrong. Ours normalizes and looks
+  up one key, so `zipf_frequency('spune-')` finds the stored row (or 0.0);
+  wordfreq tokenizes first, so it answers 5.78 — the value for `spune`.
+  Likewise `-adevăr` -> 5.03 (`adevăr`). For well-formed single words, which
+  is what the API is for, the two agree exactly; they diverge only on input
+  that isn't a single token. Worth a deliberate decision before 1.0: matching
+  wordfreq here means deciding what a multi-token argument should return.

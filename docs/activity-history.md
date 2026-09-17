@@ -922,3 +922,40 @@ overrate contemporary news/admin vocabulary (`vaccinare`, `ciolacu`, `migranți`
 against a reference that predates most of it. `ul`/`ului`/`uri`/`urile` remain
 wordfreq's biggest divergences in the opposite direction, a subword-segmentation
 artifact on its own side and not ours to chase.
+
+## 2026-09-18 — Check 5 earns its keep: malformed tokens found, tokenizer fixed
+
+Check 5 is the one check that is not pass/fail — a printed top-100 by `spread` that the
+spec says to read by eye. Reading it caught a bug no automated check had: `baden-w` in
+the list led to `_TOKEN_RE`'s inner class permitting *consecutive* hyphens, so dash
+typography (`eu--eu`, `spune--mi`, `într--adevăr` — overwhelmingly subtitles) reached
+`_split_elisions` as a single token, and its naive `word.split("-")` turned the empty
+parts into malformed output: an empty-string token from `într--o`, `-adevăr` with a
+leading hyphen, `spune-` with a trailing one.
+
+**The empty-string token had shipped.** `zipf_frequency('')` answered 2.34 where
+wordfreq answers 0.0 — a live violation of the drop-in contract, not just an untidy row.
+
+Fixed in `wrodfreq/tokenizer.py`: a run of 2+ hyphens is now a token boundary.
+Deliberately not collapsed to a single hyphen, because the dominant real cases are
+subtitle repetitions (`eu--eu`, `sunt--sunt`, `noi--noi`, `tu--tu`) where collapsing
+would manufacture the nonsense compound `eu-eu`. The 2026-09-17 single-hyphen elision
+rules are untouched and re-asserted in tests. Tokenizer tests 10 → 55, repo-wide
+130/130: the new ones assert the invariants the bad rows violated (no empty token, no
+leading/trailing/doubled hyphen) over every fixture, adversarial hyphen/apostrophe soup,
+and 3,000 random hyphen-alphabet strings.
+
+**Data cleanup deliberately not run** — logged in BACKLOG.md instead. `source_counts`
+still holds 43,137 malformed rows (3 empty, 1,140 leading-hyphen, 4,596 trailing-hyphen,
+39,274 doubled-hyphen), but that is 75,442 occurrences out of 28,217,964,718 — 0.00027%
+of the panel, every affected entry below Zipf 2.1 except the empty string. No real word's
+Zipf moves; the gain is removing ~1,240 nonsense rows from `merged` and fixing
+`zipf_frequency('')`. Rewriting the 4 GB db with ~10 GiB free is a decision worth making
+explicitly rather than as a side effect of a bug fix, and the `migrate_elisions.py`
+pattern applies directly when it happens.
+
+Two further findings measured and logged without chasing: non-Romanian diacritics split
+foreign words mid-token (`Düsseldorf` → `d` + `sseldorf`), which pollutes the low
+frequencies but leaves single-letter values tracking wordfreq's within ~0.05, so it is
+the opposite of the elision bug in severity; and `zipf_frequency` does not tokenize its
+argument whereas wordfreq's does, which only diverges on input that isn't a single token.
