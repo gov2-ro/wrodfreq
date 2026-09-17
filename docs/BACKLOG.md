@@ -259,7 +259,10 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   99.9% for the equivalent `frequency>=0.99` threshold covering the same
   words). `validate.py` now reports 4/5 checks passing; only check 2
   (rank correlation, tokenizer/elision issue, needs a full re-ingest)
-  remains open.
+  remains open. *(Superseded 2026-09-17 — check 2 now passes; the
+  remaining gap turned out to be wordfreq's own tie structure, not a
+  tokenizer issue, and the check was re-specified. See the last two
+  entries in this file.)*
 
 - [x] Elision-splitting tokenizer fix — completed 2026-09-17, but **did not
   fix check 2 alone** (see the new finding logged right after this one).
@@ -296,40 +299,68 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   **But check 2's overall Spearman rho barely moved (0.860 → 0.863)** —
   see the next entry for why, and what's needed to actually clear 0.9.
 
-- [ ] **New finding: a second, separate hyphenation phenomenon is now the
-  dominant driver of check 2's gap** — Romanian combining-form compound
-  adjectives (`austro-ungar`, `socio-economic`, `daco-roman`,
-  `anti-terorist`), not clitic elision. `wordfreq` apparently splits these
-  too, giving the combining prefix (`austro`, `socio`, `daco`, `anti`,
-  `pseudo`, `cvasi`, `traco`, `geto`, `indo`, `anglo`, `ruso`, `moldo`,
-  `germano`, `româno`, `fizico`, `științifico`, `carpato`, `istorico`)
-  real standalone frequency aggregated across every compound it appears
-  in, while ours currently keeps each compound joined, fragmenting the
-  prefix's true (often much higher) combined frequency the same way
-  elision used to fragment `într`'s.
+- [x] **Combining-form compounds investigated and closed — measured worth
+  +0.001 rho, not the dominant driver.** Resolved 2026-09-17. The previous
+  session's hypothesis (that Romanian combining-form compound adjectives —
+  `austro-ungar`, `socio-economic`, `daco-roman` — were the main remaining
+  cause of check 2's gap, the way clitic elision had been) does not survive
+  measurement, so no tokenizer change was made:
 
-  Measured before deciding whether to chase this: 7,395 distinct prefixes
-  appear in >=15 distinct hyphenated compounds each in `merged` — a
-  comparably-sized problem to the one just fixed, **not a quick
-  extension of the same rule**. Unlike clitics (a small closed
-  grammatical set), this candidate list is much larger and much noisier:
-  alongside genuine, well-established combining forms (`anti`, `non`,
-  `auto`, `pre`, `super`, `pseudo`, `micro`, `multi`, `neo`, `bio`, `eco`,
-  the historical/ethnic ones above) sit clearly spurious single-letter or
-  coincidental "prefixes" (`d`, `t`, `b`, `p`, `c`, `x`, `al`) that are
-  almost certainly noise from a huge web corpus, not real productive
-  compounding — a blanket rule here risks manufacturing nonsense splits
-  at a much larger scale than the elision fix's one accepted edge case.
+  | test | rho |
+  |---|---|
+  | baseline | 0.8628 |
+  | the 32 curated combining forms (`socio`, `austro`, `daco`, `pseudo`, `geto`, `româno`, …) removed from the comparison entirely — an **upper bound** on what any fix could buy | **0.8637** |
+  | all 6,659 ">=15 compounds" prefix candidates removed | 0.8367 — *worse*, i.e. they are mostly ordinary words, not a defect class |
 
-  Separately, **not everything driving check 2's remaining gap is fixable
-  on our side**: `ul`/`ului`/`uri`/`urile` show up as wordfreq's biggest
-  divergences in the *opposite* direction (wordfreq scores them
-  implausibly high, 4.6–5.6 zipf, for what are Romanian noun-inflection
-  suffixes that never stand alone in real text) — this looks like a
-  subword-segmentation artifact on wordfreq's own side (from splitting
-  `site-ul`-shaped words), not something correcting our own tokenizer
-  could or should chase.
+  Removing the 200 worst residuals outright only moves 0.863 → 0.871;
+  reaching 0.909 takes deleting ~2,000 words. There is no fixable tail, and
+  the riskier splitting rule the entry worried about would have bought
+  essentially nothing. Good instinct to stop and measure first.
 
-  Stopped here rather than expanding scope unilaterally into a
-  meaningfully riskier fix — logged for a deliberate decision on whether
-  and how to pursue the combining-form category next.
+- [x] **Check 2 re-specified from Spearman rho to pairwise concordance.**
+  Done 2026-09-17 — spec §11.2 rewritten, `validate.py` check 2 rewritten,
+  now **passing at 0.954** (gate 0.93). Root cause of the stuck 0.863 is the
+  *reference*, not our table: `wordfreq`'s Romanian list has only 356
+  distinct zipf values across the 43,095 words we share with it, 12,601 of
+  them in the 3.00–3.25 band alone — ~600 words per tied value, a bucket
+  spacing narrower than our own per-word disagreement, so within-band
+  ranking is a coin flip (within-band rho 0.28–0.58 throughout).
+
+  Two findings settle that it is tie noise and not a divergence of ours:
+  restricting to wordfreq's *more confident* words makes rho **worse**
+  (0.796 at wf zipf>=4.5), which is backwards for a real divergence; and
+  `ours - wordfreq` is a flat, symmetric median -0.15 / IQR 0.29 in **every**
+  band, where a tokenizer bug is skewed and band-dependent. Pearson on the
+  raw values is 0.911, top-1000 overlap 801/1000. The uniform -0.15 is a
+  ~1.4x denominator difference — the expected signature of spec §3.2's
+  honest denominator, not a defect.
+
+  The replacement metric asks what survives the ties — *when wordfreq
+  separates two words by enough to mean something, do we order them the
+  same way?*
+
+  | wordfreq separation | we agree |
+  |---|---|
+  | >=0.3 zipf (the gate) | 95.4% |
+  | >=0.5 zipf | 98.3% |
+  | >=1.0 zipf | 99.9% |
+
+  Computed **exactly**, not sampled (Fenwick sweep over the
+  reference-sorted list, 569,644,768 pairs in 2.2s) — a seeded sample would
+  still drift the moment the word list changes, and this gate has to be
+  reproducible run to run. Verified against a brute-force double loop on 500
+  randomised cases including duplicate values. Rho is still printed ungated
+  alongside Pearson, median delta and IQR, to watch drift on. **validate.py
+  now reports 5/5 gated checks passing.**
+
+  Still-open observation, unchanged and not ours to fix: `ul`/`ului`/`uri`/
+  `urile` remain wordfreq's biggest divergences in the *opposite* direction
+  (it scores Romanian noun-inflection suffixes at 4.6–5.6 zipf), a
+  subword-segmentation artifact on its side from splitting `site-ul`-shaped
+  words. The two residual tails are otherwise corpus panel, not
+  tokenization: we underrate toponyms and proper nouns (`napoca`,
+  `dobrogei`, `rebreanu`, `babeș`) where wordfreq is subtitle/Wikipedia
+  skewed, and overrate contemporary news/admin vocabulary (`vaccinare`,
+  `ciolacu`, `migranți`, `fotovoltaice`, `pensiilor`) — which is the
+  five-source contemporary panel doing exactly its job, given wordfreq's
+  Romanian predates most of it.

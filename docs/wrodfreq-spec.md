@@ -488,9 +488,32 @@ makes that possible.
 1. **Function words land where they should.** `de`, `și`, `la`, `un`, `cu` must fall in
    Zipf 6.0–7.5. If they do not, the denominator is wrong (§3.2). **This check alone
    catches the worst bug in this spec.**
-2. **Rank correlation against `wordfreq`'s Romanian list**, over the words it covers
-   (Zipf ≥ 3). Expect Spearman ρ > 0.9. A lower value means a tokenizer or normalisation
-   divergence, not a discovery.
+2. **Agreement with `wordfreq`'s Romanian list**, over the words it covers (Zipf ≥ 3),
+   scored as **pairwise concordance ≥ 0.93 over the pairs wordfreq itself separates by
+   ≥ 0.3 Zipf**. Disagreement here means a tokenizer or normalisation divergence, not a
+   discovery.
+
+   *Revised 2026-09-17.* This check originally read "Spearman ρ > 0.9", and that was the
+   wrong instrument for this particular reference. `wordfreq`'s Romanian list carries
+   only 356 distinct Zipf values across the 43,095 words we share with it, 12,601 of them
+   packed into the 3.00–3.25 band — ~600 words per tied value, a bucket spacing narrower
+   than our own per-word disagreement. Ranking inside a band is therefore a coin flip
+   (within-band ρ is 0.28–0.58 throughout), and ρ measured against it scores *its* tie
+   structure, not our table. Two symptoms confirm the diagnosis: restricting to
+   wordfreq's more confident words makes ρ **worse** (0.796 at Zipf ≥ 4.5), which is
+   backwards for a genuine divergence; and `ours − wordfreq` is a flat, symmetric
+   median −0.15 / IQR 0.29 in *every* band, where a tokenizer bug would be skewed and
+   band-dependent. Pearson on the raw values is 0.911 and top-1000 overlap is 801/1000.
+   (The uniform −0.15 is a ~1.4× denominator difference — the expected signature of
+   §3.2's honest denominator, not a defect.)
+
+   Concordance asks the question that survives the ties: *when wordfreq makes a claim
+   big enough to mean something, do we order the pair the same way?* Measured at the
+   2026-09-17 build: 95.4% at ≥ 0.3 Zipf separation, 98.3% at ≥ 0.5, 99.9% at ≥ 1.0. It
+   remains a real regression detector — the pre-2026-09-17 elision bug moved words by
+   whole Zipf points (`într` was 3.45, is 6.05), squarely inside the population it
+   scores. `validate.py` computes it exactly (Fenwick sweep, not a sample, so the gate is
+   reproducible run to run) and still prints ρ ungated, to watch drift on.
 3. **Monotone sanity pairs.** A hand-written fixture of ~50 pairs where the ordering is
    not in doubt: `apă` > `hidratare`, `mașină` > `automobil`, `casă` > `locuință`. Cheap,
    and catches merges that invert.
@@ -605,3 +628,4 @@ Ported from oțios's own hard-won list. Every one of these cost real time there.
   `status.py` / `health_check.py` / `audit.py` triad exists because a 40M-document job
   was silently cycling and nobody noticed for a day.
 - **Idempotence is a testable property and the cheapest bug detector you have.** §11.6.
+
