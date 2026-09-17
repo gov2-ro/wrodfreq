@@ -260,3 +260,76 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   words). `validate.py` now reports 4/5 checks passing; only check 2
   (rank correlation, tokenizer/elision issue, needs a full re-ingest)
   remains open.
+
+- [x] Elision-splitting tokenizer fix — completed 2026-09-17, but **did not
+  fix check 2 alone** (see the new finding logged right after this one).
+  `wrodfreq/tokenizer.py` now splits Romanian clitic/preposition elisions
+  (`într-o`→`într`+`o`, `n-am`→`n`+`am`, `avut-o`→`avut`+`o`) while keeping
+  genuine compounds/proper-nouns/loanword-suffixes joined (`mass-media`,
+  `cluj-napoca`, `site-ul`) — rule built empirically from the top-33,859
+  hyphenated words in `merged`, not guessed from grammar alone (see the
+  module docstring for the full reasoning, including the accepted `v-lea`
+  edge case and the Roman-numeral-ordinal guard `ii-a`/`xii-lea` needed).
+  10 new tokenizer tests, 52/52 passing repo-wide.
+
+  **Avoided a full re-ingest.** Since occurrence counts are exact
+  per-token, `build/migrate_elisions.py` split each affected compound's
+  *existing* count in `source_counts` directly — e.g. `într-o`'s count
+  redistributes into `într` and `o` exactly as a corrected tokenizer would
+  have produced from scratch. 2,095,059 words split across the 5-source
+  panel, +384,408,820 tokens recovered (elision rate scaled with
+  register as expected: 1.2% of `web`'s tokens vs. 3.9% of `subs`'s,
+  confirming conversational text really does contract more). One
+  accepted approximation: `documents` becomes a slight upper bound for
+  split words (if a document has both `într-o` and `într-un`, `într` gets
+  credited twice instead of once) — zipf itself, the thing check 2
+  measures, is unaffected. Backed up `data/wrodfreq.db` first (removed
+  after verifying correctness, given tight disk space), re-ran
+  `compute_zipf.py`/`merge.py`/`build_lemma_layer.py`/`build_package.py`,
+  confirmed still idempotent (check 6 unaffected) and `a` jumped to #3 by
+  zipf (was outside the top 20 before) with `o` also entering the top 20
+  — exactly the words the fix targeted. Directly verified `într` moved
+  from 3.45 (wildly wrong) to 6.05, matching `wordfreq`'s own 6.08 almost
+  exactly; `dintr`, `printr`, `a`, `o`, `am`, `au`, `ai` all showed
+  similarly dramatic, correct improvement.
+
+  **But check 2's overall Spearman rho barely moved (0.860 → 0.863)** —
+  see the next entry for why, and what's needed to actually clear 0.9.
+
+- [ ] **New finding: a second, separate hyphenation phenomenon is now the
+  dominant driver of check 2's gap** — Romanian combining-form compound
+  adjectives (`austro-ungar`, `socio-economic`, `daco-roman`,
+  `anti-terorist`), not clitic elision. `wordfreq` apparently splits these
+  too, giving the combining prefix (`austro`, `socio`, `daco`, `anti`,
+  `pseudo`, `cvasi`, `traco`, `geto`, `indo`, `anglo`, `ruso`, `moldo`,
+  `germano`, `româno`, `fizico`, `științifico`, `carpato`, `istorico`)
+  real standalone frequency aggregated across every compound it appears
+  in, while ours currently keeps each compound joined, fragmenting the
+  prefix's true (often much higher) combined frequency the same way
+  elision used to fragment `într`'s.
+
+  Measured before deciding whether to chase this: 7,395 distinct prefixes
+  appear in >=15 distinct hyphenated compounds each in `merged` — a
+  comparably-sized problem to the one just fixed, **not a quick
+  extension of the same rule**. Unlike clitics (a small closed
+  grammatical set), this candidate list is much larger and much noisier:
+  alongside genuine, well-established combining forms (`anti`, `non`,
+  `auto`, `pre`, `super`, `pseudo`, `micro`, `multi`, `neo`, `bio`, `eco`,
+  the historical/ethnic ones above) sit clearly spurious single-letter or
+  coincidental "prefixes" (`d`, `t`, `b`, `p`, `c`, `x`, `al`) that are
+  almost certainly noise from a huge web corpus, not real productive
+  compounding — a blanket rule here risks manufacturing nonsense splits
+  at a much larger scale than the elision fix's one accepted edge case.
+
+  Separately, **not everything driving check 2's remaining gap is fixable
+  on our side**: `ul`/`ului`/`uri`/`urile` show up as wordfreq's biggest
+  divergences in the *opposite* direction (wordfreq scores them
+  implausibly high, 4.6–5.6 zipf, for what are Romanian noun-inflection
+  suffixes that never stand alone in real text) — this looks like a
+  subword-segmentation artifact on wordfreq's own side (from splitting
+  `site-ul`-shaped words), not something correcting our own tokenizer
+  could or should chase.
+
+  Stopped here rather than expanding scope unilaterally into a
+  meaningfully riskier fix — logged for a deliberate decision on whether
+  and how to pursue the combining-form category next.

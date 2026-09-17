@@ -786,3 +786,88 @@ doesn't pull in `pytest`) — fixed to `-e ".[dev]"`, and actually ran the corre
 install + test sequence, plus separately verified the "43 tests pass with no data files
 at all" claim by moving `wrodfreq/data/` aside and re-running, rather than assuming the
 synthetic-fixture tests in `test_api.py` were the only ones that mattered.
+
+## 2026-09-17 — Tokenizer/elision fix: correct, verified, but not sufficient alone
+
+Picked up the check-2 item from `docs/NEXT-SESSION.md`. Before writing any splitting
+rule from grammar knowledge alone, queried the actual top-208 hyphenated words in
+`merged` by zipf — the rule needed to be broader than "split prepositions like
+într-/dintr-/printr-": participle+clitic (`avut-o`, `luat-o`), imperative+clitic
+(`du-te`, `spune-mi`, `lasă-mă`), and gerund+clitic (`referindu-se`, `aflându-se`) all
+needed the RIGHT-hand side of the hyphen checked too, not just the left. Also found and
+had to guard against a genuine ambiguity: `v`/`l`/`i`/`m`/`c` are simultaneously common
+Romanian clitics (`v-a`, `l-a`) *and* valid Roman-numeral letters, so a naive rule
+would wrongly split Roman-numeral ordinals (`ii-a` "the 2nd", `xii-lea` "the 12th") —
+confirmed empirically (151 candidate false positives found by a broad regex sweep, of
+which only the genuinely ambiguous ones — `ii`, `iii`, `iv`, `vi`...`xxiv`, and bare
+`x` — needed excluding; the single letters `i`/`v`/`l`/`m`/`c` keep the dominant
+elision reading since real ordinals almost never appear bare like `v-a` in practice).
+
+Implemented `wrodfreq/tokenizer.py`'s `_split_elisions()` and verified it against the
+full top-100 hyphenated words by zipf, then all 33,859 at a lower reliability bar —
+every compound/proper-noun/loanword-suffix case (`mass-media`, `cluj-napoca`,
+`site-ul`, `prim-ministru`, `on-line`) correctly stayed joined, every genuine elision
+correctly split, with zero unexpected surprises in either direction. 10 new tests, all
+52 passing.
+
+**Avoided a full 5-source re-ingest** (which the 2026-09-08 finding assumed would be
+necessary) by writing `build/migrate_elisions.py` instead: since a token's occurrence
+count is exact regardless of when it's computed, splitting `într-o`'s *existing* count
+into `într`+`o` in `source_counts` produces exactly what a corrected tokenizer would
+have produced from scratch. Only `documents` becomes a slight upper bound for split
+words (a document with both `într-o` and `într-un` credits `într` twice instead of
+once) — accepted, since zipf is what check 2 actually measures and is unaffected.
+Also had to explicitly wipe `source_zipf` per migrated source: `compute_zipf.py` only
+INSERTs/UPDATEs a row for a word *currently* in `source_counts`, never deletes one for
+a word that disappeared, so a bare re-run would have left every deleted compound's old
+`source_zipf` row stale.
+
+Backed up `data/wrodfreq.db` first (4GB — disk was at 98% full, had to clear
+`data/raw/`'s now-unneeded 3.5GB of cached OpenSubtitles/Europarl/DGT downloads to make
+room). Ran `--dry-run` first: 2,095,059 words would split, +384,408,820 tokens overall
+— and the elision rate scaled with register exactly as expected before even applying
+anything (1.2% of `web`'s tokens vs. 3.9% of `subs`'s conversational text), a good sign
+the rule was measuring something real. Applied for real, matching the dry run exactly.
+Re-ran `compute_zipf.py` → `merge.py` → `build_lemma_layer.py` → `build_package.py` →
+`validate.py`: idempotence (check 6) still holds across every stage, confirming the
+migration didn't introduce nondeterminism. `merge.py`'s own top-20 changed visibly:
+`a` jumped to #3 by zipf (wasn't in the top 20 before), `o` newly entered the top 20 —
+exactly the words the fix targeted. Directly compared against `wordfreq`: `într` moved
+from 3.45 (wildly wrong) to **6.05**, matching wordfreq's own **6.08** almost exactly;
+`dintr`/`printr`/`a`/`o`/`am`/`au`/`ai` all showed similarly dramatic, correct
+improvement. Removed the backup once idempotence and the targeted-word checks both
+confirmed correctness (disk space was tight enough to matter).
+
+**But check 2's overall Spearman rho barely moved: 0.860 → 0.863.** Investigated why
+rather than declaring victory on the individual-word wins — recomputed the full
+biggest-divergence list against `wordfreq` post-migration, and a completely different,
+previously-invisible pattern was now at the top: `iudeo`, `viceprim`, `traco`,
+`austro`, `științifico`, `carpato`, `socio`, `geto`, `daco`, `indo`, `ruso`, `moldo`,
+`germano`, `medico`, `pseudo`, `cvasi`, `anglo`, `anti` — Romanian combining-form
+compound adjectives (`austro-ungar`, `socio-economic`, `daco-roman`,
+`anti-terorist`), a completely different phenomenon from clitic elision. `wordfreq`
+apparently splits these too, so `austro`/`anti`/`daco`/etc. get real standalone
+frequency aggregated across every compound they appear in, while ours still keeps
+each compound joined — fragmenting these prefixes' true frequency the exact same way
+elision used to fragment `într`'s, just via a different hyphenation mechanism.
+
+Measured the scope before deciding whether to chase it in the same session: 7,395
+distinct prefixes appear in >=15 distinct hyphenated compounds each in `merged` — a
+comparably-sized problem, not a quick extension of the elision rule. Crucially, it's
+also much *noisier*: alongside genuine, well-established combining forms (`anti`,
+`non`, `auto`, `pre`, `super`, `pseudo`, `micro`, `multi`, `neo`, `bio`, `eco`, plus the
+historical/ethnic ones above) the same "productive prefix" signal also catches clearly
+spurious single letters (`d`, `t`, `b`, `p`, `c`, `x`) and questionable cases (`al`,
+`se`) that are far more likely coincidental noise from a huge web corpus than real
+Romanian compound-formation morphology — a blanket rule here risks manufacturing
+nonsense splits at meaningfully larger scale than the elision fix's one accepted edge
+case (`v-lea`). Separately, confirmed part of the remaining gap isn't fixable on our
+side at all: `ul`/`ului`/`uri`/`urile` are wordfreq's biggest divergences in the
+*opposite* direction (scored implausibly high, 4.6–5.6 zipf, for Romanian noun-suffix
+fragments that never stand alone in real text) — reads as a subword-segmentation
+artifact in wordfreq's own data, not something fixing our tokenizer could chase.
+
+Stopped here rather than unilaterally expanding into a meaningfully riskier fix.
+`validate.py` is still 4/5 (checks 1, 3, 4, 6 pass) — the elision fix is real, verified,
+and worth keeping regardless of what happens with check 2 next, but check 2 itself
+needs a deliberate decision on the combining-form question before it can clear 0.9.
