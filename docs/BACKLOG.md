@@ -400,15 +400,14 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   every fixture, adversarial hyphen/apostrophe soup, and 3,000 random
   hyphen-alphabet strings. 130/130 passing repo-wide.
 
-- [ ] **Data cleanup for the doubled-hyphen fix — `source_counts` still holds
-  the malformed rows.** The tokenizer no longer produces them, but
-  `data/wrodfreq.db` was built before the fix, so code and data currently
-  disagree. Not yet run, because it rewrites the 4 GB db and the shipped
-  package and there is only ~10 GiB free (a full backup copy is 4 GB — the
-  2026-09-17 elision migration hit the same constraint and deleted its backup
-  after verifying).
+- [x] **Data cleanup for the doubled-hyphen fix — done 2026-09-18.**
+  `build/migrate_dashes.py` repaired all 43,137 malformed rows in
+  `source_counts`; stages 2-5 re-run and `validate.py` back to **5/5, still
+  byte-identical on re-run** (check 6). `zipf_frequency('')` now returns
+  `0.0`, matching wordfreq; `merged` holds zero empty, leading-hyphen,
+  trailing-hyphen or doubled-hyphen rows.
 
-  Scope, measured:
+  Scope, as measured beforehand:
 
   | class | rows in `source_counts` | rows in `merged` |
   |---|---|---|
@@ -423,15 +422,41 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   `zipf_frequency('')`. Every affected entry sits below Zipf 2.1 except the
   empty string itself.
 
-  Approach: the `build/migrate_elisions.py` pattern, not a re-ingest —
+  Took the `build/migrate_elisions.py` route rather than a re-ingest —
   occurrence counts are exact per token, so re-running the *new*
   `_split_elisions` over just these 43,137 stored words and redistributing
   their counts reproduces what a corrected tokenizer would have counted from
   scratch. Carries the same accepted approximation as that migration
-  (`documents` becomes a slight upper bound for split words). Then re-run
-  stages 2-5 and `validate.py`. Note `_split_elisions('')` returns `['']` via
-  its no-hyphen early return, so the migration must drop empty words
-  explicitly rather than rely on it.
+  (`documents` becomes a slight upper bound for split words). Only malformed
+  words needed scanning, and that is provable rather than a shortcut: the new
+  rule differs from the old one *only* where `word.split("-")` yields an
+  empty part. `_split_elisions('')` returns `['']` via its no-hyphen early
+  return, so the migration filters empty parts explicitly instead of relying
+  on it.
+
+  **Net +52,404 tokens** across the panel (`eu` +26, `news` +269, `subs`
+  -1,015, `web` +52,910, `wiki` +214 — `subs` goes negative because
+  subtitles carry most of the empty-string rows and few `eu--eu`-shaped
+  ones). `merged` went 6,050,911 → 6,050,327 words. Every function word is
+  unchanged to 2dp (`de` 7.70, `și` 7.40, `la` 7.22, `cu` 7.06, `un` 6.93),
+  as is `într` at 6.05 — the migration moved nothing real, which was the
+  prediction.
+
+  **29 rows were dropped outright rather than repaired, and all 29 deserved
+  it**: the 3 empty-string rows (6,256 + 1,745 + 101 occurrences) plus 26
+  rows that are nothing but a run of hyphens — `-`, `--`, up to one
+  170-hyphen horizontal rule from web text. None could have come from
+  `_TOKEN_RE`, which requires a leading letter; they were manufactured
+  entirely by the old buggy split, e.g. `a-----------b` collapsing its empty
+  parts into a `-----` token. 8,274 occurrences removed in total.
+
+  Instead of a 3.74 GiB copy of the db with 7.8 GiB free, the rollback
+  snapshot is `data/checkpoints/pre_dash_migration.db` — 1.5 MiB holding the
+  43,137 affected `source_counts` rows and the 5 pre-migration
+  `sources.total_tokens` values, which is exactly enough to reverse it
+  (everything else in the db is derived and rebuildable from
+  `source_counts`). Cheaper *and* safer than a full copy on a tight disk;
+  worth reaching for first next time a migration touches a bounded row set.
 
 - [ ] **Non-Romanian diacritics split foreign words mid-token.** Mechanism
   confirmed, magnitude bounded, deliberately not chased — logged so the next
