@@ -24,19 +24,23 @@ and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the 
 
 ## Open questions — need your decision, not more building
 
-### 1. The DEX Online licensing question — the only thing blocking real functionality
+### 1. DEX Online licensing — DEFERRED ON PURPOSE, 2026-09-21. Do not pick this up.
 
-**This is the one item worth picking up first.** It gates `is_dex` in the shipped data
-file and the entire lemma layer: `lemma_frequency()` returns 0.0 today even though
-`lemma_zipf` in `data/wrodfreq.db` holds **180,820 real, validated lemma frequencies**
-(see M5's activity-history entry). The data is built and correct; only the licence
-question stops it shipping.
+**Decision: the project stays in development and gets built as good as it can be first;
+the conversation with dexonline.ro happens after that, not before.** Stop treating this
+as the blocking item — earlier revisions of this file said it was, and that is no longer
+the plan.
 
-Discussed 2026-09-17 and the conclusion was that the risk reads as **low** — what would
-be redistributed is a plain word list plus numbers, not DEX's dictionary text — and that
-the right move is simply to ask dexonline.ro directly rather than treat it as a landmine.
-**Nobody has sent that email.** That is the whole remaining action. It needs a person,
-not an engineering workaround.
+What that means in practice: `lemma_zipf` in `data/wrodfreq.db` holds 180,820 real,
+validated lemma frequencies, and they stay local. `lemma_frequency()` returning 0.0 in
+the shipped package is the intended state for now, and its graceful degradation is
+already tested. Keep building and testing the lemma layer locally; just don't ship it
+and don't gate other work on the licence answer.
+
+Background, still accurate: what would eventually be redistributed is a plain word list
+plus numbers, not DEX's dictionary text, so the risk was assessed as low (2026-09-17).
+That assessment is why deferring is safe rather than a gamble — nothing about the answer
+is expected to invalidate the work done in the meantime.
 
 ### 2. How much should oțios's scoring weight the new corroboration signal?
 
