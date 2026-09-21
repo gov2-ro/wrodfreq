@@ -493,3 +493,43 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   is what the API is for, the two agree exactly; they diverge only on input
   that isn't a single token. Worth a deliberate decision before 1.0: matching
   wordfreq here means deciding what a multi-token argument should return.
+
+- [ ] **The web corpus tokenizes URL slugs and punycode into `merged`.**
+  Measured 2026-09-21 while verifying the dash migration, which is how it
+  surfaced — **pre-existing, not caused by that migration**, which only
+  *renamed* some of these (`live---postaci-…` → `postaci-…`, correctly, as
+  the fixed tokenizer would). Logged for a decision, not because anything is
+  broken.
+
+  **23,425 `merged` entries carry 3+ hyphens**, URL-slug shaped. Examples,
+  with the count each happened to gain in the migration:
+
+  | entry | zipf |
+  |---|---|
+  | `postaci-antivaccin-forumurile-adevarul` | 1.20 |
+  | `are-cookies-how-do-they-work` | 0.71 |
+  | `increasing-and-enhancing-yourinternet-surfing-experience` | 0.63 |
+  | `buletinul-comisiunii-monumentelor-istorice` | 0.10 |
+  | `woocommerce-product-attributes-item` | -0.17 |
+  | `xn--mavapress-mfb` (punycode IDN, now `mavapress-mfb`) | below floor |
+
+  The mechanism is `_TOKEN_RE` permitting internal hyphens — necessary for
+  `mass-media` and `cluj-napoca`, and there is no way to tell a compound from
+  a slug by shape alone. Scraped web text simply contains URLs with the
+  scheme and dots stripped by the character class, leaving the hyphenated
+  path.
+
+  **Stakes are genuinely low**, which is why this is a decision and not a
+  bug: every example sits near Zipf 0, no consumer queries a URL slug,
+  `top_n_list` is untouched, and 15,289 of the 43,390 words the migration
+  touched fell below the floor and cost nothing at all. The argument for
+  acting is tidiness plus check 5 — a `spread` report is meant to be read by
+  eye, and slugs are noise in it.
+
+  If pursued, the honest options are a length cap, a hyphen-count cap, or a
+  minimum-`documents` requirement — **each needs the measure-first treatment
+  the combining-form question got** (docs/BACKLOG.md, 2026-09-17), because a
+  blanket rule also deletes real hyphenated Romanian. Note `documents` is the
+  most promising discriminator and the one this repo already stores: a real
+  compound appears across many documents, a slug appears in one page's
+  boilerplate many times. Nobody has measured that split yet.
