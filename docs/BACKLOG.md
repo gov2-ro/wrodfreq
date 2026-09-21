@@ -589,3 +589,46 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   with r/Romania alone since it is much the largest, but the arXiv paper used
   100+. The ingester takes a directory, so widening is free — worth measuring
   the token gain against the language-filter noise before hauling more down.
+
+- [x] **CI exists — added 2026-09-21.** Spec §11's heading is literally
+  "Validation — the stage that will be skipped, so make it CI", §13's M6
+  criterion was "validation checks 1-4 and 6 pass in CI", and CLAUDE.md says
+  `validate.py` "must run in CI and fail the build". There was no
+  `.github/` at all. Now `.github/workflows/ci.yml` runs on push to main, on
+  PRs, and on demand, in three jobs:
+
+  - **tests** on Python 3.10 (the `requires-python` floor) and 3.13, so a
+    3.10-incompatible syntax slip fails here rather than for whoever pip
+    installs on an older interpreter.
+  - **build scripts load** — `compileall` plus `--help` on every `build/*.py`.
+    These have no other coverage, and a bad import in an ingester would
+    otherwise surface hours into a multi-day job.
+  - **wheel builds and imports** — builds sdist+wheel, installs into a clean
+    venv and imports it. The data file is gitignored, so the wheel built there
+    has none, which makes this a real test of spec §10.1's "degrade rather
+    than explode" requirement.
+
+  **What deliberately does NOT run in CI, and why.** `validate.py`'s checks 1,
+  3 and 5 read `data/wrodfreq.db` — 3.7 GB, the output of multi-day ingests,
+  gitignored by "no .db in git, ever" — and checks 2 and 4 cross-reference a
+  local oțios checkout. Committing a fixture database would break the repo's
+  own rule, so the pipeline's *logic* is covered by `tests/test_pipeline.py`
+  instead: it builds a synthetic 5-source database in `tmp_path` and runs
+  stages 2-5 over it. Running the real `validate.py` against the real corpus
+  stays a local pre-release step, and that is now written down rather than
+  assumed.
+
+  `tests/test_pipeline.py` (11 tests) asserts spec §11.6's byte-identical
+  idempotence for compute_zipf, merge and the package payload — the property
+  §14 calls "the cheapest bug detector you have" — plus the merge rules
+  CLAUDE.md calls "the rules that decide whether the table is right", on data
+  where the expected answer is computable by hand: a source abstains rather
+  than reporting zero, a word below the floor everywhere is omitted rather
+  than zeroed, floors are derived per source (asserted against
+  `source_zipf_floor` exactly, not by proxy), the trim engages at 5 and drops
+  the extremes, 1-4 reliable takes a plain mean, function words land in the
+  band that proves the denominator, monotone ordering survives, and the merge
+  does not track the largest source.
+
+  166 tests, passing in a clean clone with no build artifacts present —
+  verified by actually cloning and installing, not assumed.

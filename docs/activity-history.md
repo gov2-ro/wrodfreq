@@ -1024,3 +1024,42 @@ asserted in both directions.
 
 Blocked on the manual torrent download; `--calibrate` exists to tune the filter
 thresholds against real data before committing to the full run.
+
+## 2026-09-21 — CI, finally, and the pipeline's logic under test
+
+The spec demands CI in three places — §11's heading is "Validation — the stage that will
+be skipped, so make it CI", §13's M6 criterion is "validation checks 1-4 and 6 pass in
+CI", and CLAUDE.md repeats it — and there was no `.github/` directory at all. M6 was
+recorded as complete without that criterion ever being met.
+
+`.github/workflows/ci.yml` now runs three jobs: the test suite on Python 3.10 (the
+`requires-python` floor) and 3.13; a `compileall` + `--help` sweep over every
+`build/*.py`, which had no coverage of any kind and where a bad import surfaces hours
+into a multi-day job; and a wheel build installed into a clean venv and imported. That
+last one is a genuine test rather than a formality: the data file is gitignored, so the
+wheel CI builds ships without one, which exercises spec §10.1's "degrade rather than
+explode" requirement directly.
+
+**What cannot run in CI is now written down instead of assumed.** `validate.py`'s checks
+1, 3 and 5 read the 3.7 GB gitignored database, and checks 2 and 4 cross-reference a
+local oțios checkout. Committing a fixture database would violate the repo's own "no .db
+in git, ever" rule, so the pipeline's logic moved into the test suite:
+`tests/test_pipeline.py` builds a synthetic five-source database in `tmp_path` and runs
+stages 2-5 over it. Running the real `validate.py` against the real corpus stays an
+explicit local pre-release step.
+
+Those 11 tests assert §11.6's byte-identical idempotence for compute_zipf, merge and the
+package payload, plus every merge rule CLAUDE.md lists as deciding whether the table is
+right — on fixture data where the expected answer is computable by hand. Sources abstain
+rather than reporting zero; a word below the floor everywhere is omitted rather than
+zeroed; floors are checked against `source_zipf_floor` exactly; the trim engages at five
+and demonstrably differs from the plain mean; function words land in the band that proves
+the denominator; and the merged value does not track the largest source, which would mean
+size-weighting had crept in.
+
+One test I wrote was wrong and the code was right: it asserted that no two sources may
+share a Zipf floor, but two corpora of equal size *should* — the floor is a pure function
+of `total_tokens`. Replaced with the exact derivation check, which is the real contract.
+
+166 tests, verified passing in an actual clean clone with no build artifacts, not assumed
+to.
