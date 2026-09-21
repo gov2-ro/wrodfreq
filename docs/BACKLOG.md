@@ -533,3 +533,59 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   most promising discriminator and the one this repo already stores: a real
   compound appears across many documents, a slug appears in one page's
   boilerplate many times. Nobody has measured that split yet.
+
+- [ ] **`social` source (Romanian subreddits) — ingester written and tested,
+  waiting on the data download.** Started 2026-09-21. `build/ingest_social.py`
+  is complete, tested end to end against a synthetic dump, and blocked only on
+  a manual torrent fetch (see below). Chosen over `books` because `books` is
+  `period='historical'` and would be excluded from the default contemporary
+  merge — it would not move a single shipped number. `social` targets the one
+  band where the panel is measurably thin: trim engagement is 99.7% at zipf>=5
+  but only 24.9% at zipf 2-3, and this takes the trim from averaging 3 values
+  to 4.
+
+  **The download is manual and cannot be automated.** No API, no usable HF
+  mirror (the one published Romanian Reddit corpus, arXiv 2410.09907, is 23k
+  samples — two orders of magnitude too small; our smallest source, `eu`, is
+  84.7M tokens). Route is Watchful1's per-subreddit extract of the Pushshift
+  dumps on Academic Torrents, `1614740ac8c94505e4ecb9d88be8bed7b6afddd4`
+  ("Subreddit comments/submissions 2005-06 to 2024-12"). The top ~40,000
+  subreddits are separate files, so a client can fetch only what is needed
+  rather than the multi-TB whole. Get at minimum `Romania_comments.zst` and
+  `Romania_submissions.zst` into `data/raw/social/`; more Romanian subreddits
+  can be added later and re-ingested incrementally, since the checkpoint is
+  per file. Note the dumps run to **2024-12**, not the "pre-2023" spec §6
+  assumed.
+
+  **Then calibrate before the real run** — `--calibrate` prints the keep rate,
+  a breakdown of why documents were dropped, and near-miss examples. The
+  language-filter thresholds were necessarily chosen without access to the
+  corpus and should be tuned against what it reports.
+
+  Three decisions this source forced, all argued in the module docstring:
+
+  1. **Language filtering, a first for this repo.** Every other source is
+     pre-tagged or monolingual by construction. English contamination here is
+     worse than the URL-slug noise, because `the`/`and`/`is` are valid token
+     shapes and would land in a Romanian table with real frequencies. The
+     filter is an English-vs-Romanian discriminator specifically — that is
+     what makes it tractable — with every RO/EN homograph (`care`, `face`,
+     `are`, `in`, `la`, `a`, `o`, `e`) deliberately excluded from the marker
+     set. A test asserts none creeps back in, because adding one is the
+     obvious wrong fix when a keep rate looks low.
+  2. **`documents` stays "one comment", not "one author"**, departing from
+     spec §7.2. Per-word distinct-author counting needs a (word, author) set
+     spanning the corpus — the unbounded memory §7.2 itself forbids — and
+     changing the unit would make the column mean something different here
+     than in the other five, destroying the cross-source comparability that
+     makes it useful. §7.2's actual concern is answered by *measuring* it
+     instead: distinct author count and the top-100 authors' share of
+     documents both go into `sources.period_note`. Same precedent
+     `ingest_subs.py` set counting lines rather than films.
+  3. **Markdown and URLs stripped before tokenizing**, so this source does not
+     repeat the 23,425-entry slug problem the web corpus already has.
+
+  Open sub-question for when the data lands: **how many subreddits?** Started
+  with r/Romania alone since it is much the largest, but the arXiv paper used
+  100+. The ingester takes a directory, so widening is free — worth measuring
+  the token gain against the language-filter noise before hauling more down.

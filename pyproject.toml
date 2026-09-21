@@ -22,6 +22,10 @@ dependencies = [
 build = [
     "datasets>=2.19",
     "huggingface_hub>=0.23",
+    # ingest_social.py only: the Reddit per-subreddit dumps are zstandard
+    # ndjson, and they need max_window_size=2**31 to decode (see that
+    # module's docstring) — the stdlib has no zstd decoder before 3.14.
+    "zstandard>=0.22",
 ]
 dev = [
     "pytest>=8",

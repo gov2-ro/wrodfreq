@@ -973,3 +973,54 @@ foreign words mid-token (`Düsseldorf` → `d` + `sseldorf`), which pollutes the
 frequencies but leaves single-letter values tracking wordfreq's within ~0.05, so it is
 the opposite of the elision bug in severity; and `zipf_frequency` does not tokenize its
 argument whereas wordfreq's does, which only diverges on input that isn't a single token.
+
+## 2026-09-21 — `social` ingester: the panel's missing register, written and tested
+
+Picked `social` (Romanian subreddits) over the spec's other unbuilt source after
+measuring where the panel is actually thin. The trimmed mean — the design feature that
+makes this table better than wordfreq's — engages for 99.7% of entries at zipf>=5 and
+96.4% at 4-5, but only 24.9% at zipf 2-3. The headline "81% of the table is
+single-source" turns out to be entirely the rare tail below zipf 2, so the panel is
+sound where it is used and thin in the 2-4 band.
+
+That ruled out `books`, which completes the spec's six-source core panel but is
+`period='historical'` and therefore excluded from the default contemporary merge — it
+would not move a single shipped number. `social` is the spec's "optional seventh", it is
+contemporary, and it takes the trim from averaging 3 values to 4.
+
+**Research findings worth not repeating.** There is no API and no usable HuggingFace
+mirror; the one published Romanian Reddit corpus (arXiv 2410.09907) is 23k samples,
+against 84.7M tokens for our smallest existing source. The route is Watchful1's
+per-subreddit Pushshift extract on Academic Torrents, where the top ~40,000 subreddits
+are separate files so only r/Romania need be fetched. The dumps now run to 2024-12, wider
+than the "pre-2023" spec §6 assumed. The reference reader also documents a real gotcha:
+these files need `max_window_size=2**31` or they fail to decode outright.
+
+`build/ingest_social.py` follows the established ingester shape (checkpoint, atomic
+`.tmp`+replace, SIGTERM/SIGHUP/SIGINT with the `os._exit()` second-signal path) and
+resumes by line number, since a zstd stream cannot be seeked — the same CPU-not-bandwidth
+trade `ingest_subs.py` makes for gzip.
+
+Three decisions this source forced, each argued in the module docstring: **language
+filtering** (a first — every other source is pre-tagged or monolingual; the filter is an
+English-vs-Romanian discriminator specifically, with every RO/EN homograph deliberately
+excluded and a test to keep them out); **`documents` staying "one comment" rather than
+"one author"**, departing from spec §7.2 because per-word author sets are the unbounded
+memory §7.2 forbids and because changing the unit would break cross-source comparability
+— the independence concern is measured into `period_note` instead; and **stripping
+markdown and URLs before tokenizing**, so this source does not reproduce the
+23,425-entry URL-slug problem the web corpus already has.
+
+Tested end to end against a synthetic zst dump: Romanian kept, English dropped,
+bot/deleted/removed skipped, URL slugs and reddit refs absent from the output, and a
+`--limit` run reproduced byte-identically by a checkpointed resume. 25 new tests, 155
+repo-wide.
+
+One real bug caught by that testing: a truncated `--test`/`--limit` run was marking
+`sources.status = 'completed'`, and `eligible_sources()` selects on exactly that value —
+a partial social ingest would have entered the merge as if it were the whole corpus.
+Same class of footgun as ingest_news.py's `--test`/`--db` one. Now tracked explicitly and
+asserted in both directions.
+
+Blocked on the manual torrent download; `--calibrate` exists to tune the filter
+thresholds against real data before committing to the full run.
