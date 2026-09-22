@@ -671,3 +671,57 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
 
   166 tests, passing in a clean clone with no build artifacts present —
   verified by actually cloning and installing, not assumed.
+
+- [ ] **`social` fetch running — `build/fetch_social.py`, 15 subreddits over
+  HTTP.** Started 2026-09-22. Acquisition is now a separate stage from
+  ingestion, deliberately: the tokenizer has already changed twice (elision
+  2026-09-17, doubled hyphens 2026-09-18) and each change would otherwise have
+  meant re-downloading rather than re-running a local stage.
+
+  **Panel chosen by measurement, not guesswork** (`--probe`, 2026-09-22,
+  comments/day):
+
+  | tier | subreddits |
+  |---|---|
+  | high | `Romania` 2,729 · `CasualRO` 1,366 · `programare` 889 · `Bucuresti` 828 · `AskRomania` 709 |
+  | regional | `moldova` 133 · `cluj` 124 · `Iasi` 94 · `Sibiu` 59 · `Timisoara` 53 · `Oradea` 49 · `Craiova` 47 · `Constanta` 33 · `Brasov` 24 · `romani` 12 |
+  | probed and dead | `RoGaming`, `RomaniaMuiePSD`, `RomaniaTravel`, `RepublicaMoldova`, `RoStocks`, `financiarRO`, `RomaniaCorporate`, `universitate`, `RomaniaGaming`, `antiromania` (last post 2022), `baniRO`, `transilvania`, `ITjobsRomania`, `StiriDinRomania`, `RomanianFood` — recorded so nobody re-probes them hopefully |
+
+  ~7,000 comments/day across the live panel today; full history is roughly
+  11M records, ~33h at the measured 335k/hour.
+
+  **Only four fields are stored** (`author`, `body`, `subreddit`,
+  `created_utc`, plus `title`/`selftext` for submissions). A raw Arctic Shift
+  record carries ~90 fields and runs 3-5 KB, which would be tens of GB of
+  JSON to recover a few hundred MB of Romanian — against ~11.5 GiB free. The
+  trade is explicit: re-deriving anything from score, flair or thread
+  structure later means re-fetching.
+
+  `moldova` is included on purpose — Moldovan Romanian is the same language,
+  and its heavy code-switching is a real test of the language filter rather
+  than a reason to exclude it. Worth checking its keep rate separately once
+  the data lands.
+
+- [x] **Bot/moderator accounts were leaking boilerplate into the corpus —
+  fixed 2026-09-22.** Caught by running the real fetcher rather than the
+  synthetic fixture: `brasov-ModTeam` posts removal notices constantly ("Hi
+  u/X! To reduce spam, accounts with less than 200 comment karma require
+  moderator approval"), and the original filter caught `AutoModerator` and
+  `*bot` but not `<subreddit>-ModTeam`, which every subreddit has. Now
+  excluded, with regression tests.
+
+  Deliberately **not** deduplicating repeated text: the unit of trust is the
+  *author*, not the string. Real people repeat themselves ("da", "mersi",
+  "asa e") and that is genuine Romanian usage — only mechanical repetition
+  from bot/mod accounts is mechanical. Guard tests also assert ordinary
+  accounts (`MakavelliRo`, `SfantulAsteapta`) are not swallowed by the
+  deliberately broad `*bot` suffix.
+
+  Two smaller fixes from the same run: `sources.period_note` still described
+  the Watchful1 torrent route that does not exist, and the subreddit list in
+  it double-counted every subreddit (once for `_comments`, once for `_posts`).
+
+  Early independence reading on a 10k-document test: 2,997 distinct authors,
+  top 100 accounting for 28.5% of documents — far healthier than the LUMRO
+  case spec §7.2 warns about (111 authors, 638 of 1,425 rare words from one
+  person).

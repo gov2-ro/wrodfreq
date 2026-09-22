@@ -315,7 +315,20 @@ def record_text(rec: dict) -> str | None:
     not a missing field.
     """
     author = rec.get("author") or ""
-    if author in ("[deleted]", "AutoModerator") or author.lower().endswith("bot"):
+    low = author.lower()
+    # Moderator and bot accounts post identical boilerplate over and over
+    # ("Hi u/X! To reduce spam, accounts with less than 200 comment karma..."),
+    # which is mechanical repetition, not usage. Caught 2026-09-22: the
+    # original filter missed `<subreddit>-ModTeam` accounts, which every
+    # subreddit has and which post removal notices constantly.
+    #
+    # The unit of trust here is the *author*, not the text: repeated identical
+    # text from real people ("da", "mersi", "asa e") is genuine Romanian usage
+    # and must not be deduplicated away.
+    if (author in ("[deleted]", "AutoModerator")
+            or low.endswith("bot")
+            or low.endswith("-modteam")
+            or low.endswith("modteam")):
         return None
 
     if "body" in rec:
@@ -418,9 +431,11 @@ def independence_note(author_counts: Counter, total_docs: int, files: list[Path]
     n_authors = len(author_counts)
     top100 = sum(c for _, c in author_counts.most_common(100))
     share = (100.0 * top100 / total_docs) if total_docs else 0.0
-    subs = ", ".join(sorted(f.name.split("_")[0] for f in files))
+    # Dedupe: each subreddit contributes both a _comments and a _posts file.
+    subs = ", ".join(sorted({f.name.split("_")[0] for f in files}))
     return (
-        f"Reddit per-subreddit dumps (Watchful1/Pushshift, through 2024-12); "
+        f"Romanian subreddits via the Arctic Shift archive "
+        f"(arctic-shift.photon-reddit.com), fetched by build/fetch_social.py; "
         f"subreddits: {subs}. `documents` counts comments/submissions, NOT authors "
         f"— kept comparable with the other five sources on purpose (spec §7.2 "
         f"suggests authors; see ingest_social.py's docstring for why that would "

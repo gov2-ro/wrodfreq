@@ -153,12 +153,34 @@ def test_code_blocks_are_stripped():
     {"author": "AutoModerator", "body": "Postare ștearsă automat."},
     {"author": "some_bot", "body": "Cred că este foarte bine"},
     {"author": "SomeBot", "body": "Cred că este foarte bine"},
+    # Every subreddit has a <name>-ModTeam account posting removal notices
+    # constantly. Missed by the original filter, caught 2026-09-22 when
+    # brasov-ModTeam's boilerplate turned up in a real fetch.
+    {"author": "brasov-ModTeam", "body": "Pentru promovare vezi Reddit for Business"},
+    {"author": "Romania-ModTeam", "body": "Postarea a fost eliminata."},
+    {"author": "someModTeam", "body": "Cred că este foarte bine"},
     {"author": "x", "body": "[deleted]"},
     {"author": "x", "body": "[removed]"},
     {"author": "x", "body": ""},
 ])
 def test_non_content_records_are_skipped(rec):
     assert social.record_text(rec) is None
+
+
+def test_ordinary_authors_are_not_mistaken_for_bots():
+    """The bot suffixes must not swallow real accounts — `*bot` is deliberately
+    broad, so guard the obvious false positives."""
+    for author in ("RealUser", "Robert", "MakavelliRo", "SfantulAsteapta"):
+        assert social.record_text({"author": author, "body": "salut ce faci"}) is not None
+
+
+def test_repeated_human_text_is_not_deduplicated():
+    """The unit of trust is the author, not the text. Real people repeat
+    themselves ("da", "mersi", "asa e") and that is genuine Romanian usage —
+    only mechanical repetition from bot/mod accounts is excluded."""
+    rec = {"author": "cineva", "body": "da"}
+    assert social.record_text(rec) == "da"
+    assert social.record_text(rec) == "da"
 
 
 def test_comment_and_submission_shapes():
