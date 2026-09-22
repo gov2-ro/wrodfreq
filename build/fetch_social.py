@@ -69,6 +69,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -81,6 +82,7 @@ CHECKPOINT = Path("data/checkpoints/social_fetch.json")
 PAGE_LIMIT     = 100      # server caps here; larger values return nothing
 PAGE_DELAY     = 0.25     # seconds between pages, on top of any rate-limit wait
 MAX_BACKOFF    = 300.0
+MAX_ATTEMPTS   = 8        # then hand back to the restart loop, see get_page()
 COMPRESS_EVERY = 250_000  # records buffered to the .ndjson before compacting
 
 USER_AGENT = ("wrodfreq/0.1 (Romanian word-frequency corpus; "
@@ -116,6 +118,11 @@ SUBREDDITS = [
 COMMENT_FIELDS    = ("author", "body", "subreddit", "created_utc")
 SUBMISSION_FIELDS = ("author", "title", "selftext", "subreddit", "created_utc")
 
+class FetchStalled(RuntimeError):
+    """A page failed past MAX_ATTEMPTS. Ends this pass without losing the
+    checkpoint, so the restart loop resumes at the same page."""
+
+
 _shutdown = False
 
 
@@ -150,7 +157,9 @@ def get_page(kind: str, subreddit: str, before: int | None) -> list[dict]:
         url += f"&before={before}"
 
     backoff = 2.0
+    attempt = 0
     while True:
+        attempt += 1
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -170,7 +179,20 @@ def get_page(kind: str, subreddit: str, before: int | None) -> list[dict]:
                 json.JSONDecodeError, OSError) as exc:
             if _shutdown:
                 raise KeyboardInterrupt from exc
-            print(f"    request failed ({exc}); retrying in {backoff:.0f}s", flush=True)
+            if attempt >= MAX_ATTEMPTS:
+                # Give up on this page rather than spin forever. Observed
+                # 2026-09-22: Arctic Shift returns a spurious HTTP 422 now and
+                # then, which recovers on retry — but a *permanent* 4xx would
+                # otherwise loop at MAX_BACKOFF for ever, looking alive while
+                # making no progress. Raising here ends this subreddit's pass
+                # with its checkpoint intact; run_social_fetch.sh restarts and
+                # resumes from exactly this page, so nothing is skipped
+                # silently.
+                raise FetchStalled(
+                    f"{subreddit}/{kind}: {attempt} consecutive failures, "
+                    f"last was {exc!r}") from exc
+            print(f"    request failed ({exc}); retry {attempt}/{MAX_ATTEMPTS} "
+                  f"in {backoff:.0f}s", flush=True)
             time.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF)
 
@@ -234,6 +256,7 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
 
     written = 0
     start = time.time()
+    window: deque[tuple[float, int]] = deque()   # (timestamp, cumulative count)
     fh = ndjson_path.open("a", encoding="utf-8")
     try:
         while not _shutdown:
@@ -244,6 +267,11 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
                 batch = get_page(kind, subreddit, state["before"])
             except KeyboardInterrupt:
                 break
+            except FetchStalled as exc:
+                print(f"  [{key}] STALLED: {exc}", flush=True)
+                print(f"  [{key}] checkpoint intact at {state['count']:,} records; "
+                      f"the restart loop will resume here", flush=True)
+                raise
             if not batch:
                 state["done"] = True
                 print(f"  [{key}] history exhausted at {state['count']:,} records", flush=True)
@@ -269,7 +297,21 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
             if state["count"] % 5_000 < PAGE_LIMIT:
                 fh.flush()
                 save_checkpoint(cp)
-                rate = written / max(time.time() - start, 1e-9) * 3600
+                # A recent-window rate, not a cumulative average: a couple of
+                # 300s network backoffs drag the lifetime average down by an
+                # order of magnitude and make a perfectly healthy job look
+                # stalled (observed 2026-09-22 — 21,872/h reported while the
+                # job was actually sustaining 450,000/h).
+                now = time.time()
+                window.append((now, state["count"]))
+                while len(window) > 1 and now - window[0][0] > 120:
+                    window.popleft()
+                if len(window) > 1:
+                    dt = now - window[0][0]
+                    dn = state["count"] - window[0][1]
+                    rate = dn / dt * 3600 if dt > 0 else 0.0
+                else:
+                    rate = written / max(now - start, 1e-9) * 3600
                 print(f"    [{key}] {state['count']:,} records | "
                       f"back to {datetime.fromtimestamp(oldest, timezone.utc):%Y-%m-%d} | "
                       f"{rate:,.0f}/h", flush=True)
@@ -335,11 +377,16 @@ def main() -> int:
           flush=True)
     total = 0
     t0 = time.time()
+    stalled = []
     for sub in subs:
         for kind in kinds:
             if _shutdown:
                 break
-            total += fetch(sub, kind, cp, args.max_records)
+            try:
+                total += fetch(sub, kind, cp, args.max_records)
+            except FetchStalled as exc:
+                # One wedged subreddit must not block the other fourteen.
+                stalled.append(str(exc))
         if _shutdown:
             break
 
@@ -348,7 +395,11 @@ def main() -> int:
     grand = sum(v["count"] for v in cp.values())
     print(f"\n{total:,} records this run, {grand:,} total on disk, "
           f"{(time.time()-t0)/60:.1f}m", flush=True)
-    if done:
+    if stalled:
+        print(f"\n{len(stalled)} subreddit(s) stalled this pass:", flush=True)
+        for m in stalled:
+            print(f"  {m}", flush=True)
+    if done and not stalled:
         print("All subreddits exhausted. Next: python build/ingest_social.py --calibrate")
         return 0
     print("Not finished — re-run with --resume to continue.", flush=True)
