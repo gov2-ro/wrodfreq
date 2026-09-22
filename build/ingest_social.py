@@ -8,29 +8,35 @@ spontaneous, unedited, native, contemporary Romanian, and the zipf 2.0-4.0 band
 is exactly where the panel is thinnest (trim engagement 25-71%, measured
 2026-09-21).
 
-## Getting the data — this is a manual step, on purpose
+## Getting the data
 
-There is no API and no HuggingFace mirror worth using (the one published
-Romanian Reddit corpus, arXiv 2410.09907, is 23k samples — two orders of
-magnitude too small to be a panel source). The data is Watchful1's per-subreddit
-extract of the Pushshift dumps, on Academic Torrents:
+**Not Academic Torrents — checked, 2026-09-22.** Search results advertise a
+per-subreddit release ("Subreddit comments/submissions 2005-06 to 2024-12",
+hash `1614740ac8c94505e4ecb9d88be8bed7b6afddd4`) and an earlier version of this
+docstring repeated it. It does not exist: that hash 404s, so do the three other
+per-subreddit hashes search results offer, *including the one in Watchful1's own
+PushshiftDumps README*. The URL form is not the problem —
+`academictorrents.com/download/<hash>.torrent` returns 200 and a 3.7 MB torrent
+for a hash that is real. Academic Torrents' `database.xml` lists 34 Reddit
+entries and none is per-subreddit; parsing the real archive torrent
+(`ba051999301b109eab37d16f027b3f49ade2de13`) shows 464 files, **all whole-month**
+(`RC_2005-12.zst`, `RS_…`), 2.84 TiB. Filtering r/Romania out of that costs
+~50 GiB of download per month of data.
 
-    https://academictorrents.com/details/1614740ac8c94505e4ecb9d88be8bed7b6afddd4
-    "Subreddit comments/submissions 2005-06 to 2024-12"
+**Use Arctic Shift instead**, a no-auth HTTP archive:
 
-The top ~40,000 subreddits are published as *separate files*, so a torrent
-client can fetch only what is needed rather than the multi-TB whole. Download at
-minimum:
+    https://arctic-shift.photon-reddit.com/api/comments/search?subreddit=Romania&limit=100
 
-    Romania_comments.zst
-    Romania_submissions.zst
+It returns records carrying `author`, `body`, `subreddit` and `created_utc` —
+exactly what `record_text()` below already parses, including the literal
+`[deleted]`/`[removed]` bodies it already skips. Page back through history with
+`&before=<created_utc>`. Page size caps at 100; measured ~335k comments/hour.
 
-and drop them in `data/raw/social/` (gitignored). More Romanian subreddits can
-be added to that directory later and re-ingested incrementally — the checkpoint
-is per file, so adding a file does not redo the ones already counted.
-
-Note the dumps now run to **2024-12**, not the "pre-2023" spec §6 assumed when
-it was written. The contemporary window is wider than planned.
+Either way this module reads **zstandard-compressed ndjson**, one JSON record
+per line, from `data/raw/social/*.zst` — so anything that produces that shape
+works, and a torrent dump would still drop straight in if one ever appears.
+More Romanian subreddits can be added to the directory later and ingested
+incrementally, since the checkpoint is per file.
 
 ## Three decisions this source forces, none of which the other five did
 
@@ -205,7 +211,7 @@ _MD_LINK_RE  = re.compile(r"\[([^\]]*)\]\([^)]*\)")   # keep the label, drop the
 _ENTITY_RE   = re.compile(r"&(?:gt|lt|amp|nbsp|#\d+);")
 _CODE_RE     = re.compile(r"`{1,3}[^`]*`{1,3}")
 
-MIN_TOKENS_FOR_LANGID = 4   # below this, a stricter rule applies
+MIN_TOKENS_FOR_LANGID = 4   # reporting threshold only — see looks_romanian()
 
 
 def clean_markdown(text: str) -> str:
@@ -234,16 +240,30 @@ def language_signals(tokens: list[str]) -> tuple[int, int, int]:
 def looks_romanian(tokens: list[str]) -> bool:
     """Whether to count this document's tokens at all.
 
-    Long enough to judge: needs at least two Romanian signals and more Romanian
-    than English. Too short to judge: needs a Romanian signal and *no* English
-    at all — the asymmetry is deliberate, since a wrong keep pollutes the table
-    permanently while a wrong drop only costs a few tokens out of hundreds of
-    millions.
+    **The absence of English is itself the strong signal**, and length barely
+    matters — that is the one thing calibration against real r/Romania text
+    (12,000 comments, 2026-09-22) overturned. The first version of this rule
+    demanded two Romanian signals regardless, and threw away 7.3% of the
+    corpus: `Ma bucur ca a supravietuit!`, `De ce nu are sabie de dac?`,
+    `Hai sa vedem pe cine mai ataca Rusia in afara NATO` — all unambiguously
+    Romanian, all `ro=1, en=0`, all dropped. Romanian written without
+    diacritics and without the handful of long function words simply does not
+    trip two markers in a short comment, and short comments are most of Reddit.
+
+    So: with no English competing at all, one Romanian marker is enough. Only
+    when English is actually present does the stricter both-and rule apply.
+    Measured effect on the 12k sample: keep rate 80.5% -> 88.5%, +877
+    documents, of which a hand-checked sample was uniformly Romanian, with
+    zero English documents newly admitted and zero URL-slug tokens.
+
+    The asymmetry is still deliberate in the contested case: a wrong keep
+    pollutes the table permanently, a wrong drop costs a few tokens out of
+    hundreds of millions.
     """
     ro, en, dia = language_signals(tokens)
     ro += dia                      # a diacritic is as good as a function word
-    if len(tokens) < MIN_TOKENS_FOR_LANGID:
-        return ro >= 1 and en == 0
+    if en == 0:
+        return ro >= 1
     return ro >= 2 and ro > en
 
 

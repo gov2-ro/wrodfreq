@@ -1063,3 +1063,48 @@ of `total_tokens`. Replaced with the exact derivation check, which is the real c
 
 166 tests, verified passing in an actual clean clone with no build artifacts, not assumed
 to.
+
+## 2026-09-22 — The torrent route was a fiction; calibration rewrote the language filter
+
+Two corrections, both from checking things that had been taken on trust.
+
+**The per-subreddit torrent does not exist.** Yesterday's ingester docstring and BACKLOG
+entry told the reader to fetch `Romania_comments.zst` from Academic Torrents hash
+`1614740ac8c94505e4ecb9d88be8bed7b6afddd4`. That came from a search-result title, never a
+verified page, and it is wrong: the hash 404s, as do the three other per-subreddit hashes
+search results offer — including the one in Watchful1's own PushshiftDumps README. The
+URL form was never the problem (`/download/<hash>.torrent` returns 200 and a 3.7 MB
+torrent for a real hash). Academic Torrents' own `database.xml` carries 34 Reddit entries
+and not one is per-subreddit; parsing the real archive torrent confirms 464 files, all
+whole-month, 2.84 TiB. Extracting r/Romania that way costs ~50 GiB of download per month
+of data against ~11.5 GiB of free disk. Dead route, and the user had already installed a
+torrent client on the strength of it.
+
+**Arctic Shift works and was verified before being recommended this time.** A no-auth
+HTTP archive at `arctic-shift.photon-reddit.com`, returning records with `author`,
+`body`, `subreddit`, `created_utc` — exactly the fields `record_text()` already parses.
+Measured ~335k comments/hour (12,000 in 129s), well above its documented ~120k. That
+12k sample spans only 2026-09-15..22, about one week, which puts full r/Romania history
+near 4-6M comments, roughly 15 hours rather than the 40-80 first estimated. The ingester
+reads zstandard ndjson from `data/raw/social/*.zst` regardless of provenance, so nothing
+about it had to change.
+
+**Calibration against that real sample overturned the language rule** — precisely what
+`--calibrate` was built for. The original rule demanded two Romanian markers regardless
+of length and threw away 7.3% of the corpus: `Ma bucur ca a supravietuit!`, `De ce nu are
+sabie de dac?`, `Hai sa vedem pe cine mai ataca Rusia in afara NATO`, all unambiguously
+Romanian, all scoring `ro=1, en=0`. The missed insight is that **absence of English is
+itself the strong signal**, and length barely matters: Romanian written without
+diacritics in a short comment does not trip two markers, and short comments are most of
+Reddit. One marker with no English now suffices; the stricter both-and test applies only
+when English is actually present.
+
+Keep rate 80.5% → 88.5% of judgeable documents, +877 documents. The relaxation was
+verified rather than assumed: of those 877, a hand-checked sample was uniformly Romanian,
+zero contained 3+ common English words, and zero URL-slug tokens appeared — a
+`digi24.ro/stiri/guvernul-aloca-peste-135-milioane-…` link produced no slug tokens,
+confirming the URL stripping holds on real data. The ten comments that exposed the bug
+are now regression tests. 177 tests.
+
+Still undecided: whether to run the full multi-hour crawl against a community service,
+and whether to widen past r/Romania.

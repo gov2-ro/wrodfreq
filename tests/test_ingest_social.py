@@ -83,6 +83,39 @@ def test_short_text_needs_a_clean_romanian_signal():
     assert judge("ok") is False                    # no signal either way
 
 
+# Real r/Romania comments that the FIRST version of the filter dropped, from
+# the 2026-09-22 calibration against 12,000 live comments. Every one is
+# unambiguously Romanian and every one scored ro=1, en=0 — the rule demanded
+# two Romanian signals and so discarded 7.3% of the corpus. Romanian written
+# without diacritics, in a short comment, simply does not trip two markers.
+# These are the regression guard for that fix.
+REAL_ROMANIAN_ONE_SIGNAL = [
+    "Ma bucur ca a supravietuit!",
+    "De ce nu are sabie de dac?",
+    "baietii lui de la clubul pensionarilor.",
+    "Hai sa vedem pe cine mai ataca Rusia in afara NATO",
+    "A uitat sa schimbe contu",
+    "ce ba nu esti bolofil?",
+    "Nici el nu mai intelege ce face",
+    "Au inebunit si astia, pe langa alti nebuni.",
+    "Aia era problema ca nu ai putut intelege reply ul",
+    "iar joaca Nicusor sah din ala 5D?",
+]
+
+
+@pytest.mark.parametrize("text", REAL_ROMANIAN_ONE_SIGNAL)
+def test_real_romanian_with_a_single_marker_is_kept(text):
+    assert judge(text) is True
+
+
+def test_absence_of_english_is_the_signal_not_length():
+    """The rule's pivot: with no English competing, one Romanian marker is
+    enough at any length; only when English is present does the stricter
+    both-and rule apply."""
+    assert judge("sabie dac nu") is True           # short, ro>=1, en==0
+    assert judge("the sabie dac nu of the") is False  # English present, ro<2
+
+
 def test_urls_are_stripped_before_tokenizing():
     """The 2026-09-21 URL-slug finding, prevented at the source this time."""
     text = "Uite aici https://example.com/foo-bar-baz-slug si chiar bine asta."

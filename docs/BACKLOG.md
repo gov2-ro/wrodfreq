@@ -544,23 +544,62 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   but only 24.9% at zipf 2-3, and this takes the trim from averaging 3 values
   to 4.
 
-  **The download is manual and cannot be automated.** No API, no usable HF
-  mirror (the one published Romanian Reddit corpus, arXiv 2410.09907, is 23k
-  samples — two orders of magnitude too small; our smallest source, `eu`, is
-  84.7M tokens). Route is Watchful1's per-subreddit extract of the Pushshift
-  dumps on Academic Torrents, `1614740ac8c94505e4ecb9d88be8bed7b6afddd4`
-  ("Subreddit comments/submissions 2005-06 to 2024-12"). The top ~40,000
-  subreddits are separate files, so a client can fetch only what is needed
-  rather than the multi-TB whole. Get at minimum `Romania_comments.zst` and
-  `Romania_submissions.zst` into `data/raw/social/`; more Romanian subreddits
-  can be added later and re-ingested incrementally, since the checkpoint is
-  per file. Note the dumps run to **2024-12**, not the "pre-2023" spec §6
-  assumed.
+  **CORRECTED 2026-09-22 — the per-subreddit torrent does not exist.** An
+  earlier version of this entry (and of the module docstring) said to fetch
+  `Romania_comments.zst` from Academic Torrents hash
+  `1614740ac8c94505e4ecb9d88be8bed7b6afddd4`, taken from a search result
+  rather than a verified page. Checked properly:
 
-  **Then calibrate before the real run** — `--calibrate` prints the keep rate,
-  a breakdown of why documents were dropped, and near-miss examples. The
-  language-filter thresholds were necessarily chosen without access to the
-  corpus and should be tuned against what it reports.
+  - that hash returns **404**, as do the three other per-subreddit hashes
+    search results offer — *including the one in Watchful1's own
+    `PushshiftDumps` README*;
+  - the URL form `academictorrents.com/download/<hash>.torrent` is correct
+    (200 + a 3.7 MB torrent for a hash that is real), so the syntax was fine
+    and the hashes are simply dead;
+  - Academic Torrents' own `database.xml` lists 34 Reddit entries and **not
+    one is per-subreddit**. Parsing the real archive torrent
+    (`ba051999301b109eab37d16f027b3f49ade2de13`) confirms it: **464 files,
+    all whole-month** (`RC_2005-12.zst`, `RS_…`), **2.84 TiB**.
+
+  Extracting r/Romania that way means pulling ~50 GiB per month to recover a
+  few MB of Romanian. Not viable — the machine has ~11.5 GiB free. **The
+  torrent route is dead, not merely inconvenient.**
+
+  **Working route: the Arctic Shift HTTP archive**, no auth, verified live.
+  `https://arctic-shift.photon-reddit.com/api/comments/search?subreddit=Romania&limit=100`
+  returns real r/Romania comments carrying `author`, `body`, `subreddit` and
+  `created_utc` — exactly the fields `record_text()` already parses, including
+  the literal `[deleted]`/`[removed]` bodies it already skips. Page size caps
+  at 100; measured throughput **~335k comments/hour** (12,000 in 129s), well
+  above the ~120k/hour the docs suggest. The 12k sample spanned only
+  2026-09-15..22, i.e. roughly one week, which puts full r/Romania history at
+  an estimated 4-6M comments ≈ **15 hours**, not the 40-80 first guessed.
+
+  Still to decide: whether to run that full crawl (days of traffic against a
+  community service — worth asking before starting), and whether to widen
+  beyond r/Romania.
+
+  **Calibration done 2026-09-22, and it changed the rule** — which is the
+  whole reason `--calibrate` exists. Against 12,000 live r/Romania comments
+  the original rule kept 80.5% of judgeable documents and dropped 7.3% of the
+  corpus *wrongly*: `Ma bucur ca a supravietuit!`, `De ce nu are sabie de
+  dac?`, `Hai sa vedem pe cine mai ataca Rusia in afara NATO` — all
+  unambiguously Romanian, all scoring `ro=1, en=0`, all discarded because the
+  rule demanded two Romanian signals regardless of length.
+
+  The missed insight: **absence of English is itself the strong signal**, and
+  length barely matters. Romanian written without diacritics in a short
+  comment does not trip two markers, and short comments are most of Reddit.
+  The rule now keeps anything with one Romanian marker and no English at all,
+  applying the stricter both-and test only when English is actually present.
+
+  Measured effect: keep rate **80.5% → 88.5%** of judgeable documents, +877
+  documents. Verified the relaxation is safe rather than assumed — of the 877,
+  a hand-checked sample was uniformly Romanian, **zero** contained 3+ common
+  English words, and **zero** URL-slug tokens appeared (a `digi24.ro/stiri/
+  guvernul-aloca-peste-135-milioane-…` link produced no slug tokens at all,
+  confirming the markdown/URL stripping works on real data). The ten real
+  comments that exposed the bug are now regression tests.
 
   Three decisions this source forced, all argued in the module docstring:
 
