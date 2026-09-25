@@ -241,7 +241,8 @@ def compress(ndjson_path: Path, zst_path: Path) -> None:
 def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
     """Page back through one subreddit's history. Returns records written."""
     key = f"{subreddit}/{kind}"
-    state = cp.setdefault(key, {"before": None, "count": 0, "done": False})
+    state = cp.setdefault(key, {"before": None, "count": 0, "done": False, "bytes": 0})
+    state.setdefault("bytes", 0)
     if state["done"]:
         print(f"  [{key}] already complete ({state['count']:,} records)", flush=True)
         return 0
@@ -253,6 +254,19 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
 
     if state["count"] == 0 and ndjson_path.exists():
         ndjson_path.unlink()          # stale partial from a discarded run
+    elif ndjson_path.exists() and ndjson_path.stat().st_size > state["bytes"]:
+        # Records written after the last checkpoint but before the process
+        # died. `before` was never advanced past them, so resuming would fetch
+        # and append them a second time. Truncate back to the checkpointed
+        # size so the file and the checkpoint agree exactly. Without this a
+        # kill costs up to one checkpoint interval of duplicated records, and
+        # duplicates inflate occurrence counts silently -- the one thing a
+        # frequency table cannot tolerate quietly.
+        extra = ndjson_path.stat().st_size - state["bytes"]
+        print(f"  [{key}] truncating {extra:,} unaccounted bytes written after "
+              f"the last checkpoint (would otherwise duplicate)", flush=True)
+        with ndjson_path.open("r+b") as trunc:
+            trunc.truncate(state["bytes"])
 
     written = 0
     start = time.time()
@@ -296,6 +310,8 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
 
             if state["count"] % 5_000 < PAGE_LIMIT:
                 fh.flush()
+                os.fsync(fh.fileno())
+                state["bytes"] = ndjson_path.stat().st_size
                 save_checkpoint(cp)
                 # A recent-window rate, not a cumulative average: a couple of
                 # 300s network backoffs drag the lifetime average down by an
@@ -317,7 +333,10 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
                       f"{rate:,.0f}/h", flush=True)
             time.sleep(PAGE_DELAY)
     finally:
+        fh.flush()
+        os.fsync(fh.fileno())
         fh.close()
+        state["bytes"] = ndjson_path.stat().st_size if ndjson_path.exists() else 0
         save_checkpoint(cp)
 
     if state["done"] or (max_records is not None and state["count"] >= max_records):
