@@ -557,10 +557,17 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   forced for another reason, fold that in. Scripts kept in the scratchpad, not
   committed. Timing: wiki 129 s, web ~255 s of streaming, db queries ~2 s.
 
-- [ ] **`zipf_frequency` does not tokenize its argument; wordfreq's does.** Noted
+- [x] **`zipf_frequency` does not tokenize its argument; wordfreq's does.** Noted
   2026-09-18; measured 2026-10-02 (Brief B3) against wordfreq 3.1.1 (the copy in
   `~/devbox/otios/.venv` — the one `validate.py` uses; this repo's `.venv` has no
-  wordfreq). **Proposal only — nothing changed; Opus decides.**
+  wordfreq). **Resolved 2026-10-02: ADR-001 decided, Brief B5 implemented.**
+  `zipf_frequency`/`word_frequency` now tokenize and combine harmonically; numerals
+  and unconsumed letters return `minimum` (documented divergences); the extensions
+  keep exact lookup. Two departures from the proposal below: **no exact-key-first
+  path** (ADR-001 decision 2 — the tokenizer is idempotent on its own output, so it
+  was redundant, and the 225 apostrophe rows it existed to protect were migrated out
+  by `build/migrate_apostrophes.py`), and conflict A resolved as option (i). The
+  text below is the original B3 record, kept for the measurements.
 
   *What wordfreq does* (`_word_frequency`, `wordfreq/__init__.py:~237`): tokenize;
   **zero tokens -> `minimum`**; look each token up (digit runs are smashed to `0`s
@@ -641,7 +648,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   single well-formed tokens (`de`, `birjă`, `cuvântcarenuexista`); `validate.py`
   never calls `wrodfreq.zipf_frequency` (it reads the DB, and calls
   *wordfreq's* `zipf_frequency` on wordfreq's own list, all single tokens).
-  Proposal tests are in `tests/test_api.py`, all `skip`ped (`test_b3_*`).
+  The `test_b3_*` cases in `tests/test_api.py` are now live (un-skipped by B5).
 
 - [ ] **The web corpus tokenizes URL slugs and punycode into `merged`.**
   Measured 2026-09-21 while verifying the dash migration, which is how it
@@ -895,3 +902,13 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   up to compact incrementally (which would cap the transient peak above, and matters if a
   subreddit ever dwarfs r/Romania) or delete the constant so it stops implying a buffering
   behaviour that does not exist.
+
+- [ ] **The tokenizer is not idempotent on one corner: an apostrophe at an internal
+  hyphen boundary.** Found 2026-10-02 by `migrate_apostrophes.py`'s own
+  postcondition. `tokenize("da'-a'-a'")` gives `["da'-a'", "a"]`, but
+  `tokenize("da'-a'")` gives `["da'-a"]` — the elision split can leave an apostrophe
+  at a token's edge that the regex would never emit on its own. One row, one
+  occurrence in the whole panel (web), which the migration took to a fixed point
+  (`da`, `a`, `a`). Not fixed in the tokenizer (out of B5's scope); it belongs with
+  any future tokenizer change, and `test_tokenizer.py` has no idempotence property
+  over adversarial apostrophe/hyphen soup that would catch it.

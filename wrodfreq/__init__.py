@@ -10,9 +10,13 @@ Extensions — clearly marked as such, not part of the wordfreq contract:
 
     from wrodfreq import frequency_detail, lemma_frequency, by_source, build_info
 
-`zipf_frequency`/`word_frequency` return 0.0 for an unknown word, matching
-wordfreq's own contract; `frequency_detail`/`by_source` return None instead —
-two different signals for two different questions (spec §10.1).
+`zipf_frequency`/`word_frequency` tokenize their argument and return 0.0 (or
+`minimum`) for an unknown word, matching wordfreq's own contract;
+`frequency_detail`/`by_source` do an exact single-row lookup and return None
+instead — two different signals for two different questions (spec §10.1,
+ADR-001). `zipf_frequency('spune-')` is a number; `frequency_detail('spune-')`
+is None. Divergences from wordfreq: numerals and words with non-Romanian
+letters return `minimum` (see `zipf_frequency`).
 
 `lemma_frequency` currently always returns 0.0: the DEX-derived paradigm
 rollup isn't shipped in the data file pending an unresolved licensing
@@ -24,7 +28,9 @@ from __future__ import annotations
 
 from wrodfreq import _surface
 from wrodfreq._surface import FrequencyDetail
-from wrodfreq.tokenizer import normalize
+import math
+
+from wrodfreq.tokenizer import _TOKEN_RE, normalize, tokenize
 
 __version__ = "0.1.0"
 
@@ -40,33 +46,88 @@ __all__ = [
 ]
 
 
+def _unconsumed(text: str) -> bool:
+    """True if `text` has a letter or digit the tokenizer did not consume
+    (`café`, `a1b`, `de 123`, a bare `123`). ADR-001 decisions 3 and 4."""
+    return any(c.isalnum() for c in _TOKEN_RE.sub(" ", normalize(text)))
+
+
+def _combined_zipfs(text: str) -> list[float] | None:
+    """The per-token Zipf values of `text`, or None if the whole string must
+    answer `minimum`: any unconsumed letter/digit, any token this table never
+    saw. An empty list means zero tokens (also `minimum`, but the caller can
+    tell them apart if it needs to — it does not).
+    """
+    if _unconsumed(text):
+        return None
+    data = _surface.load()
+    out: list[float] = []
+    for token in tokenize(text):
+        i = data.row(token)
+        if i is None:
+            return None
+        out.append(data.zipf(i))
+    return out
+
+
 def zipf_frequency(
     word: str, lang: str = "ro", wordlist: str = "best", minimum: float = 0.0
 ) -> float:
-    """Zipf-scale frequency of `word`. 0.0 for a word this table never saw.
+    """Zipf-scale frequency of `word`, as wordfreq would answer it (ADR-001).
+
+    The argument is tokenized with the same tokenizer that built the table, so
+    `'Spune-'`, `'(de)'` and `'  DE '` all answer for the one token they hold.
+    A multi-token string combines harmonically, `1/f = sum(1/f_i)`, so a phrase
+    is always rarer than its rarest token. The result is `minimum` (default
+    0.0) for: no tokens, any token this table never saw, and any string with a
+    letter or digit the tokenizer did not consume — never a frequency
+    fabricated from surviving fragments of a word we did not count.
+
+    Two documented divergences from wordfreq, both deliberate:
+
+    * **Numerals** (`'123'`) return `minimum`. wordfreq answers 3.92 from a
+      digit-frequency model; this table excludes numerals from numerator and
+      denominator by design (spec §3.2), and a word-frequency table is the
+      wrong place for a digit model.
+    * **Words with foreign diacritics** (`'café'`, `'Düsseldorf'`) return
+      `minimum`, because the tokenizer only knows Romanian letters.
+
+    **0.0 here does not mean `frequency_detail` is None, or vice versa.** This
+    function answers "how common is this, as wordfreq would say"; the
+    extensions answer "what does the table hold for this exact entry".
+    `zipf_frequency('spune-')` is a real number while
+    `frequency_detail('spune-')` is None, since no row is keyed `spune-`. Two
+    different questions, two different signals (spec §10.1).
 
     `lang` and `wordlist` are accepted and ignored — wROdfreq has exactly one
-    language and one wordlist. `minimum` is a floor on the *returned* value,
-    same as wordfreq's: the result is never less than `minimum`, even for an
-    unknown word.
+    language and one wordlist. `minimum` is a floor on the *returned* value.
     """
-    data = _surface.load()
-    i = data.row(normalize(word))
-    zipf = data.zipf(i) if i is not None else 0.0
-    return max(zipf, minimum)
+    zipfs = _combined_zipfs(word)
+    if not zipfs:
+        return minimum
+    if len(zipfs) == 1:
+        return max(zipfs[0], minimum)
+    # Harmonic combination in the linear domain: 1/f = sum(1/f_i) with
+    # f_i = 10**(z_i - 9), so zipf = -log10(sum(10**-z_i)).
+    combined = round(-math.log10(sum(10.0 ** -z for z in zipfs)), 2)
+    return max(combined, minimum)
 
 
 def word_frequency(
     word: str, lang: str = "ro", wordlist: str = "best", minimum: float = 0.0
 ) -> float:
-    """Linear-scale frequency of `word` (fraction of all tokens). 0.0 if unknown.
+    """Linear-scale frequency of `word` (fraction of all tokens). Tokenizes and
+    combines exactly as `zipf_frequency` does (ADR-001, same divergences), but
+    entirely in the linear domain — never through a rounded Zipf value.
 
     `minimum` floors the *linear* result, matching wordfreq's own semantics
     (its `zipf_frequency` floors the zipf value instead — these are not the
     same floor restated in two scales).
     """
-    z = zipf_frequency(word, lang, wordlist)
-    freq = 0.0 if z == 0.0 else 10**z / 1e9
+    zipfs = _combined_zipfs(word)
+    if not zipfs:
+        return minimum
+    freq = 1.0 / sum(1.0 / (10.0 ** z / 1e9) for z in zipfs)
     return max(freq, minimum)
 
 

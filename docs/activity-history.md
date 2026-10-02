@@ -1234,3 +1234,39 @@ rather than fix anything. Recommendation to Opus: do not widen; treat legacy-var
 normalization as its own decision (with `ã` ambiguous against Portuguese, 17% mapping in
 wiki). Findings are in `docs/BACKLOG.md`; measurement scripts stayed in scratch. About
 7 minutes of compute in total.
+
+## 2026-10-02 — Brief B5: `zipf_frequency` tokenizes (ADR-001); apostrophe residue migrated out
+
+Carried out Brief B5 against ADR-001, migration first because it is the half that touches
+data. `build/migrate_apostrophes.py` follows `migrate_dashes.py`: re-split each stored
+apostrophe-edged word with today's tokenizer, fold into the destination row, delete the
+residue, adjust `sources.total_tokens`, wipe the touched sources' `source_zipf`, then
+stages 2-5. It differs in two deliberate ways: one transaction for all sources, and the
+rollback snapshot (`data/checkpoints/pre_apostrophe_migration.db`, 114 KB) also holds the
+pre-migration value of every row it folds *into*, since an existing destination cannot be
+restored by subtraction alone.
+
+`source_counts` held **2,136** such rows, not the ADR's 225 — 225 is what reached `merged`;
+the rest sat below the floors (news 18, subs 180, web 1,929, wiki 9, eu 0). 2,111 were pure
+renames/folds. Occurrences are therefore **not** literally unchanged, and the ADR/brief
+framing "unchanged" holds only for that class: 12 rows split in two (`'a-dracu`,
+`lasă-n'`, `permiteți-n'`) and one row, a lone `'` (web, 4 occurrences), is not a token at
+all. Conservation is asserted as the exact identity `after = before + Σ(len(parts)-1)·occ`:
+news, wiki, eu unchanged; subs +24; web +5; and `SUM(occurrences) == total_tokens` holds
+before and after for every source. Idempotent (second run: "no-op").
+
+Finding the migration surfaced: the tokenizer is not idempotent when an apostrophe sits at
+an internal hyphen boundary (`da'-a'-a'` -> `da'-a'`, which tokenizes again to `da'-a`).
+One row; the migration takes repairs to a fixed point. Logged in BACKLOG, tokenizer untouched.
+
+`merged` 6,050,327 -> **6,050,118**, not the ADR's 6,050,102: 225 residue keys gone, 16
+newly present — 9 fold destinations that did not exist in any source before (`creatoru`,
+`puhno`, `entuziasmu`...) and, by subtraction, 7 existing rows lifted over a floor by the fold.
+No function word moved at 2 dp (`de` 7.70, `și` 7.40, `la` 7.22, `un` 6.93, `cu` 7.06) and
+none of the top 2,000 entries moved at 2 dp.
+
+API: `zipf_frequency`/`word_frequency` tokenize, combine harmonically in the linear domain,
+and return `minimum` for zero tokens, any unknown token, or any unconsumed letter/digit
+(so numerals too). No exact-key-first path. The 13 `test_b3_*` cases are live; two were
+changed against B3's original (see the test file): its `_harmonic_zipf` helper carried a
+stray `+ 9`, and its `"spune-"` case compared against `de`, not against `spune`.

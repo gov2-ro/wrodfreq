@@ -455,6 +455,17 @@ by_source('birjă')                  # {'web': 1.8, 'news': None, 'subs': 2.1, .
 contract, and `frequency_detail` must return `None`. Two different signals for two
 different questions; do not unify them.
 
+`zipf_frequency` and `word_frequency` **tokenize their argument** with
+`wrodfreq.tokenizer.tokenize`, as `wordfreq` does (ADR-001): zero tokens or any unknown
+token returns `minimum`; one token returns its value; two or more combine harmonically,
+`1/f = Σ 1/f_i`. So `zipf_frequency('spune-')` is a number while
+`frequency_detail('spune-')` is `None` — the extensions stay exact single-row lookup.
+That is the intended asymmetry, not a conflict. Two documented divergences from
+`wordfreq`: **numerals** return `minimum` (it answers `123` with 3.92; we exclude
+numerals from numerator and denominator by design, §3), and **a string with letters or
+digits the tokenizer did not consume** (`café`, `a1b`, `de 123`) returns `minimum`
+rather than a frequency fabricated from the surviving fragments.
+
 ### 10.2 Data file
 
 Follow `wordfreq`'s own approach: a compressed table shipped inside the wheel, loaded

@@ -168,41 +168,42 @@ def test_build_info_reports_the_panel():
 
 
 # ---------------------------------------------------------------------------
-# Brief B3 — PROPOSED tokenize-first behaviour for zipf_frequency/word_frequency.
-# All skipped: they document intent and change nothing until Opus decides.
-# Mechanism being proposed (wordfreq 3.1.1 `_word_frequency`): tokenize, any
-# missing token -> `minimum`, otherwise combine 1/f = sum(1/f_i) in the LINEAR
-# domain, round to 2 decimals. See docs/BACKLOG.md ("zipf_frequency does not
-# tokenize") for the divergence table and the open contract conflicts.
+# ADR-001 / Brief B5 — zipf_frequency and word_frequency tokenize their argument.
+# Mechanism (wordfreq 3.1.1 `_word_frequency`): tokenize, any missing token ->
+# `minimum`, otherwise combine 1/f = sum(1/f_i) in the LINEAR domain, round to
+# 2 decimals. These began as Brief B3's skipped proposal; two cases were changed
+# against it (see the notes on `_harmonic_zipf` and the edge-punctuation test).
 # ---------------------------------------------------------------------------
 import math  # noqa: E402
 
-_B3 = pytest.mark.skip(reason="B3 proposal, not adopted — awaiting Opus decision")
-
 
 def _harmonic_zipf(*zipfs: float) -> float:
-    return round(math.log10(1 / sum(1 / 10**z for z in zipfs)) + 9, 2)
+    # B3's original had a stray `+ 9`: log10 of the harmonic combination of the
+    # 10**z values is already a Zipf value, so it never matched wordfreq's.
+    return round(math.log10(1 / sum(1 / 10**z for z in zipfs)), 2)
 
 
-@_B3
-@pytest.mark.parametrize("text", ["spune-", "-de", "(de)", "'de'", "  de  ", "DE"])
+@pytest.mark.parametrize("text", ["-de", "(de)", "'de'", "  de  ", "DE", "de-"])
 def test_b3_edge_punctuation_and_case_resolve_to_the_single_token(text):
     assert wrodfreq.zipf_frequency(text) == wrodfreq.zipf_frequency("de")
 
 
-@_B3
+def test_edge_hyphen_resolves_to_the_token_it_wraps():
+    # B3's parametrization compared "spune-" with "de"; it meant "the same word
+    # without the hyphen", which needs a word the fixture actually holds.
+    assert wrodfreq.zipf_frequency("birjă-") == wrodfreq.zipf_frequency("birjă") == 1.78
+
+
 def test_b3_multi_token_is_harmonic_combination_not_first_or_min():
     assert wrodfreq.zipf_frequency("de un") == _harmonic_zipf(7.71, 6.89)
     assert wrodfreq.zipf_frequency("de,un") == wrodfreq.zipf_frequency("de un")
 
 
-@_B3
 def test_b3_any_unknown_token_makes_the_whole_phrase_unknown():
     assert wrodfreq.zipf_frequency("de cuvântcarenuexista") == 0.0
     assert wrodfreq.zipf_frequency("de cuvântcarenuexista", minimum=2.0) == 2.0
 
 
-@_B3
 @pytest.mark.parametrize("text", ["", "   ", "...", "!?"])
 def test_b3_zero_tokens_is_zero_not_none(text):
     # Matches wordfreq. zipf_frequency stays 0.0; frequency_detail stays None.
@@ -211,7 +212,25 @@ def test_b3_zero_tokens_is_zero_not_none(text):
     assert wrodfreq.frequency_detail(text) is None
 
 
-@_B3
 def test_b3_word_frequency_combines_in_linear_domain():
     expected = 1 / (1 / (10**7.71 / 1e9) + 1 / (10**6.89 / 1e9))
     assert wrodfreq.word_frequency("de un") == pytest.approx(expected, rel=0.02)
+    assert wrodfreq.word_frequency("de un", minimum=1.0) == 1.0
+
+
+@pytest.mark.parametrize("text", ["café", "a1b", "de 123", "123", "de1"])
+def test_unconsumed_letters_or_digits_return_minimum_not_a_fragment_answer(text):
+    # ADR-001 decisions 3 and 4: never combine surviving fragments, and
+    # numerals are not modelled (wordfreq answers 3.92 for "123"; we do not).
+    assert wrodfreq.zipf_frequency(text) == 0.0
+    assert wrodfreq.zipf_frequency(text, minimum=2.0) == 2.0
+    assert wrodfreq.word_frequency(text) == 0.0
+
+
+def test_zipf_and_detail_are_two_signals_not_one():
+    # ADR-001 decision 5: zipf_frequency answers as wordfreq would; the
+    # extensions stay exact single-row lookup and keep returning None.
+    assert wrodfreq.zipf_frequency("birjă-") == 1.78
+    assert wrodfreq.frequency_detail("birjă-") is None
+    assert wrodfreq.by_source("birjă-") is None
+    assert wrodfreq.frequency_detail("de un") is None
