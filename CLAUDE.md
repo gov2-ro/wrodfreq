@@ -154,6 +154,29 @@ long job) → M2 CulturaX backbone → M3 rest of panel (≥5 sources, so the tr
 reachable) → M4 merge + first wheel → M5 lemma layer → M6 publish → M7 expose
 `n_reliable` back to oțios (a change in *that* repo — the only coupling between the two).
 
+## Opus designs, Sonnet builds
+
+The work splits by model. **When you are Opus**, defer implementation and well-defined
+future work to Sonnet by default:
+
+- **Opus** writes specs, ADRs and briefs; makes and records decisions; and reviews Sonnet's
+  results against the brief before they are accepted.
+- **Sonnet** carries out a brief: code, spikes, measurements, fixture changes, and the
+  activity and backlog entries for that work.
+- **Opus does the work itself** when the task is a few lines, or when the design is still
+  moving and the doing is part of the deciding.
+
+**A brief** is one self-contained file next to the work it describes. It holds the question, 
+the decisions already made, what to build, what to measure, what to deliver and where, 
+what is out of scope, and when to stop and ask. 
+Sonnet must not need to read the specs to follow it.
+
+**Sonnet stops and asks** when a step would change a spec, an ADR, an invariant or a
+dependency outside the brief's folder. It reports what it measured and what it assumed.
+
+To hand over, Opus tells the owner that the brief is ready. The owner runs it in a Sonnet
+session, or asks Opus to start a Sonnet agent on it.
+
 ## Repo conventions
 
 - No `.db` or `.csv` in git, ever. `data/wrodfreq.db` and `data/checkpoints/` are
