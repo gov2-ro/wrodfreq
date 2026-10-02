@@ -205,3 +205,46 @@ def test_tokenizer_output_invariants_on_random_hyphen_soup():
         for token in tokenize(text):
             assert token and not token.startswith("-") and not token.endswith("-")
             assert "--" not in token, (text, token)
+
+
+# B6: the elision split must re-apply the edge invariant _TOKEN_RE enforces.
+@pytest.mark.parametrize("text, expected", [
+    ("las'-o in pace", ["las", "o", "in", "pace"]),
+    ("zi'-mi", ["zi", "mi"]),
+    ("hai, las'-o' baltă", ["hai", "las", "o", "baltă"]),
+    ("zi-i'-o'", ["zi", "i", "o"]),
+    ("da'-a'-a'", ["da", "a", "a"]),
+    ("da'-a'", ["da", "a"]),
+])
+def test_b6_apostrophe_edged_pieces_settle(text, expected):
+    assert tokenize(text) == expected
+
+
+@pytest.mark.parametrize("word", ["mass-media", "site-ul", "e-mail", "ma'-sa"])
+def test_b6_genuine_compounds_survive(word):
+    assert tokenize(word) == [word]
+
+
+def test_b6_intr_o_still_splits():
+    assert tokenize("într-o") == ["într", "o"]
+
+
+_B6_CORPUS = _INVARIANT_INPUTS + [
+    "las'-o in pace", "zi'-mi", "hai, las'-o' baltă", "zi-i'-o'", "da'-a'-a'",
+    "Nu-i bai, spune-mi-o mie, n-am zis că nu-l știu; d'-aia mass-media e-mail",
+    "ma'-sa a zis: 'las'-o'", "dă-mi'-o", "'-'-'", "a'-b'-c'-d'",
+]
+
+
+def test_b6_every_emitted_token_is_a_fixed_point():
+    rng = random.Random(1)
+    alphabet = "abcăîșțoi-'  "
+    inputs = list(_B6_CORPUS) + [
+        "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 16)))
+        for _ in range(5000)
+    ]
+    for text in inputs:
+        for t in tokenize(text):
+            assert t, (text, t)
+            assert t[0] not in "'-" and t[-1] not in "'-", (text, t)
+            assert tokenize(t) == [t], (text, t, tokenize(t))

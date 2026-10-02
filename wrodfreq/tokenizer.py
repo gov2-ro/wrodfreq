@@ -131,6 +131,25 @@ def normalize(text: str) -> str:
     )
 
 
+def _settle(token: str) -> list[str]:
+    """Split one regex token to a fixed point of the edge invariant.
+
+    `_split_elisions` hands back pieces without re-applying what `_TOKEN_RE`
+    enforces (a token starts and ends with a letter), so `las'-o` left `las'`
+    behind. Re-run each changed piece through the regex and the split until it
+    reproduces itself; every emitted token `t` then satisfies `tokenize(t) == [t]`.
+    Terminates because a piece that differs from its parent is strictly shorter.
+    """
+    pieces = _split_elisions(token)
+    if pieces == [token]:
+        return pieces
+    out: list[str] = []
+    for piece in pieces:
+        for sub in _TOKEN_RE.findall(piece):
+            out.extend([sub] if sub == token else _settle(sub))
+    return out
+
+
 def tokenize(text: str) -> list[str]:
     """Split normalized text into Romanian word tokens, short words included."""
     tokens = _TOKEN_RE.findall(normalize(text))
@@ -138,5 +157,5 @@ def tokenize(text: str) -> list[str]:
         return tokens
     out: list[str] = []
     for t in tokens:
-        out.extend(_split_elisions(t))
+        out.extend(_settle(t))
     return out

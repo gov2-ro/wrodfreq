@@ -903,12 +903,11 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   subreddit ever dwarfs r/Romania) or delete the constant so it stops implying a buffering
   behaviour that does not exist.
 
-- [ ] **The tokenizer is not idempotent on one corner: an apostrophe at an internal
+- [x] **The tokenizer is not idempotent on one corner: an apostrophe at an internal
   hyphen boundary.** Found 2026-10-02 by `migrate_apostrophes.py`'s own
-  postcondition. `tokenize("da'-a'-a'")` gives `["da'-a'", "a"]`, but
-  `tokenize("da'-a'")` gives `["da'-a"]` — the elision split can leave an apostrophe
-  at a token's edge that the regex would never emit on its own. One row, one
-  occurrence in the whole panel (web), which the migration took to a fixed point
-  (`da`, `a`, `a`). Not fixed in the tokenizer (out of B5's scope); it belongs with
-  any future tokenizer change, and `test_tokenizer.py` has no idempotence property
-  over adversarial apostrophe/hyphen soup that would catch it.
+  postcondition; fixed the same day (brief B6). `tokenize("da'-a'-a'")` gave
+  `["da'-a'", "a"]` and `las'-o` gave `las'` — the elision split handed back pieces
+  without re-applying the edge invariant `_TOKEN_RE` enforces. `_settle()` now re-runs
+  each changed piece through the regex and the split to a fixed point, so every emitted
+  token `t` satisfies `tokenize(t) == [t]`. Asserted by a property test over adversarial
+  soup. No data migration was needed: all 6,050,118 `merged` keys reproduce exactly.

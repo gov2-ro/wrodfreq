@@ -1270,3 +1270,23 @@ and return `minimum` for zero tokens, any unknown token, or any unconsumed lette
 (so numerals too). No exact-key-first path. The 13 `test_b3_*` cases are live; two were
 changed against B3's original (see the test file): its `_harmonic_zipf` helper carried a
 stray `+ 9`, and its `"spune-"` case compared against `de`, not against `spune`.
+
+## 2026-10-02 — B6: the tokenizer re-applies its edge invariant after elision splitting
+
+The apostrophe residue had been migrated out of the table, but the generator still made
+it: `las'-o`, `zi'-mi`, `zi-i'-o'` and `da'-a'-a'` came back with an apostrophe-edged
+piece (`las'`, `zi'`, `da'-a'`), because `_split_elisions` returned its parts without
+re-checking what `_TOKEN_RE` guarantees on its own. Colloquial `subs` and the incoming
+`social` source would have regenerated the class at volume. Same shape as the `--` fix
+(`df501d0`), data half already done by `migrate_apostrophes.py`.
+
+`wrodfreq/tokenizer.py` gains `_settle()`: each piece that differs from its parent goes
+back through the regex and the split until it reproduces itself (terminates, since a changed
+piece is strictly shorter). Genuine compounds are untouched (`mass-media`, `site-ul`,
+`e-mail`, `ma'-sa` stay whole; `într-o` still splits). Character class not widened (ADR-002).
+Tests: the six colloquial strings, the compounds, and a property test (5,000 random
+apostrophe/hyphen strings plus the fixtures) asserting every emitted token is non-empty,
+edge-clean, and satisfies `tokenize(t) == [t]`; the new tests fail on the old tokenizer.
+
+Proof no migration is needed: all 6,050,118 `merged` keys satisfy `tokenize(w) == [w]`
+(0 unreachable). Read-only access to the database. BACKLOG item closed.
