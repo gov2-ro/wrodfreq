@@ -21,17 +21,41 @@ and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the 
   `lemma_frequency` degrades gracefully to 0.0 — see open question 1, which is why.
 - **M7 done**: `~/devbox/otios/validate_with_wrodfreq.py` exists, wROdfreq is an editable
   dependency there, staged as a standalone CSV — not wired into oțios's scoring.
-- **In flight, and the only unfinished work: `social`, a 6th source.**
-  `build/fetch_social.py` is acquiring 15 Romanian subreddits over Arctic Shift HTTP.
-  r/Romania comments are **complete** (12,050,513 records back to 2010-03-30); r/Romania
-  posts stopped at 255,000 records back to 2022-02-06 and the other 14 subreddits have not
-  started. Nothing is running — a reboot ended it, which `run_social_fetch.sh` documents as
-  the one thing it does not survive. Resume with
-  `nohup build/run_social_fetch.sh > /dev/null 2>&1 &`; `--resume` skips what is `done`.
-  Disk is the binding constraint, not time — see the `BACKLOG.md` entry for the measured
-  budget (~5 GiB free, ~8 GiB comfortable). When this lands the panel is ≥6 sources and
-  spec §8's trim branch goes live for the first time, so `validate.py` checks 1 and 2 want
-  re-reading rather than assuming.
+- **In flight: `social`, a 6th source.** `build/fetch_social.py` is acquiring 15 Romanian
+  subreddits over Arctic Shift HTTP. r/Romania comments **complete** (12,050,513 records
+  back to 2010-03-30, 844 MiB `.zst`); r/Romania posts in progress; the other 14 not
+  started. Resume after any reboot with
+  `nohup build/run_social_fetch.sh > /dev/null 2>&1 &` — `--resume` skips what is `done`.
+  Disk is no longer the constraint (~20 GiB free against a ~3.9 GiB transient peak).
+  When it lands the panel is ≥6 sources and spec §8's trim branch goes live for the first
+  time, so `validate.py` checks 1 and 2 want re-reading rather than assuming.
+- **`merged` is 6,050,118 rows** (was 6,050,327; the apostrophe migration closed a residue
+  class). **224 tests**, `validate.py` **5/5** with check 6 byte-identical.
+
+## How work is organised now
+
+`CLAUDE.md` gained an "Opus designs, Sonnet builds" section. In practice:
+
+- `docs/briefs/` — one self-contained brief per task, written before the work. Sonnet runs
+  it without needing the specs. B1, B2, B3, B5, B6 are done; **B4 is the only queued item**
+  and is blocked until the crawl finishes.
+- `docs/decisions/` — ADRs for calls that outlive their brief. ADR-001 (`zipf_frequency`
+  tokenizes; extensions stay exact lookup) and ADR-002 (do not widen the token class;
+  legacy Romanian variants are the real defect).
+
+## 2026-10-02 in one paragraph
+
+The restart would have destroyed 259,688 already-fetched records: the checkpoint carried no
+`bytes` key because the process that wrote it was running code loaded before the file was
+edited, and `setdefault("bytes", 0)` read absent as zero. Fixed by recovering state from
+the append-log, which is the only thing that cannot disagree with itself. Then five briefs
+landed: regression tests for that recovery; the foreign-diacritics measurement (do not
+widen — but half of `web`'s "foreign" characters turn out to be mis-encoded Romanian, worth
+up to **+0.58 Zipf on real words**, which is the known-wrong number to quote when a
+re-ingest is next costed); `zipf_frequency` now tokenizes its argument and matches
+`wordfreq`'s harmonic combination; the apostrophe residue migrated out of `source_counts`
+with conservation proved; and the tokenizer's hyphen-split path stopped regenerating that
+residue, which had been blocking the social ingest.
 
 ## Open questions — need your decision, not more building
 
