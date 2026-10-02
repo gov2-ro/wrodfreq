@@ -1155,3 +1155,22 @@ Note for whoever resumes: `COMPRESS_EVERY = 250_000` is defined but never read â
 to its full uncompressed size before being compacted, so peak disk for a subreddit is its
 uncompressed ndjson plus its finished `.zst` at the same moment (3.87 GiB for r/Romania
 comments). That is the figure that governs free-space planning, not the compressed total.
+
+## 2026-10-02 â€” Regression tests for the fetch checkpoint near-miss
+
+The live social crawl was resumed from a checkpoint written before the `bytes` field
+existed. The code read the missing field as `0`, which the resume check took to mean the
+whole 82 MB append-log was unaccounted for; it would have truncated it to nothing while
+leaving `before` at its stale value, silently losing the 2022-02 to 2026-09 span of
+r/Romania posts, which would never have been refetched. The fix (`rebuild_state_from_file()`)
+landed first, but nothing in the suite would have caught the original bug, so this adds
+`tests/test_fetch_social.py` (11 tests, all synthetic, in a tmp dir; no network, nothing
+under `data/`, and `fetch_social.py` itself untouched because it is running).
+
+Covered: a checkpoint with no `bytes` keeps every record; recovery returns the exact line
+count, the true minimum `created_utc` and the byte offset of the last complete line;
+a stale `before` newer than the file's oldest record is corrected backwards, never
+forwards; a torn final line (truncated, or complete JSON with no newline) is trimmed
+rather than parsed; the normal path with `bytes` present still truncates the unaccounted
+tail and leaves an exact match alone; and `done: true` entries are skipped without being
+truncated, recovered or saved.
