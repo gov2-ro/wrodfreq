@@ -1108,3 +1108,50 @@ are now regression tests. 177 tests.
 
 Still undecided: whether to run the full multi-hour crawl against a community service,
 and whether to widen past r/Romania.
+
+## 2026-09-25 — `fetch_social.py`: r/Romania comments acquired, and a duplicate bug caught by timing
+
+The crawl question left undecided on 09-22 ("whether to run the full multi-hour crawl
+against a community service") was answered yes, and `build/fetch_social.py` is the
+acquisition stage that does it: 15 probed-live Romanian subreddits, comments and posts,
+paged backwards over Arctic Shift's no-auth HTTP API into the zstandard-ndjson
+`ingest_social.py` already reads. Acquisition only — it computes nothing, so a killed
+fetch costs bandwidth and never numbers. `build/run_social_fetch.sh` wraps it in a
+restart loop that survives laptop sleep, dropped sockets and any non-zero exit, but
+deliberately not a reboot: after one of those the operator re-runs the script and
+`--resume` picks up from the per-page checkpoint.
+
+**r/Romania comments are complete: 12,050,513 records back to 2010-03-30.** 844.2 MiB
+compressed, 3,266,623,308 bytes uncompressed — a 3.87× zstd-10 ratio, 73.4 bytes per
+record compressed. r/Romania posts reached 255,000 records back to 2022-02-06 before the
+machine was restarted; the other 14 subreddits have not started.
+
+**The sizing estimate was badly wrong and is worth recording as a lesson.** Going in, the
+whole 15-subreddit panel was put at ~11M records and ~0.5 GiB. One subreddit was 12M
+records and 0.84 GiB. The error came from extrapolating total history off a one-week
+sample, which captures the current posting rate and not the archive behind it — r/Romania's
+measured 2,729 comments/day today is 1.37× its own 16-year lifetime average of ~1,998/day,
+because subreddits grow. Scale historical volume off a lifetime average, never off a
+current-rate probe.
+
+**One real bug, found because the operator asked what a restart would need.** The
+checkpoint is written every ~5,000 records but the output file is appended continuously,
+so a process killed between the two left records on disk that the checkpoint did not know
+about — and because `before` had never advanced past them, `--resume` would fetch and
+append them a second time. Duplicates inflate occurrence counts silently, which is the one
+failure mode a frequency table cannot tolerate quietly. The checkpoint now carries the
+file size alongside the count, fsyncs, and truncates the file back to the checkpointed
+size on resume so the two always agree exactly. Verified by simulating a kill with two
+stray records appended: both were removed and the output matched byte for byte. The fix
+landed before the restart that would have hit it.
+
+Also tightened in the same pass: retries are capped at `MAX_ATTEMPTS = 8` and then hand
+back to the restart loop rather than backing off forever, and the progress line reports a
+recent-window rate instead of a lifetime average, so a stall is visible as a falling
+number instead of being hidden in a long-run mean.
+
+Note for whoever resumes: `COMPRESS_EVERY = 250_000` is defined but never read —
+`compress()` is called once, at the end of each subreddit. The append-log therefore grows
+to its full uncompressed size before being compacted, so peak disk for a subreddit is its
+uncompressed ndjson plus its finished `.zst` at the same moment (3.87 GiB for r/Romania
+comments). That is the figure that governs free-space planning, not the compressed total.

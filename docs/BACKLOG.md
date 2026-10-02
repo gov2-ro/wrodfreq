@@ -725,3 +725,24 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   top 100 accounting for 28.5% of documents — far healthier than the LUMRO
   case spec §7.2 warns about (111 authors, 638 of 1,425 rare words from one
   person).
+
+- [ ] **Finish the `social` acquisition crawl.** `build/fetch_social.py` has r/Romania
+  comments complete (12,050,513 records back to 2010-03-30, 844.2 MiB `.zst`). Remaining:
+  r/Romania posts, interrupted at 255,000 records back to 2022-02-06, plus all 14 other
+  subreddits. Resume with `nohup build/run_social_fetch.sh > /dev/null 2>&1 &` — the
+  checkpoint skips what is `done`. Measured cost basis: 73.4 bytes/record compressed,
+  3.87× zstd-10 ratio, so sum-of-rates scaling off r/Romania puts the remaining 14 at
+  ~19.5M comments and ~1.4 GiB compressed; ~2.4 GiB for the whole panel once compacted.
+  **Free space is governed by the transient peak, not that total**: `compress()` runs once
+  per subreddit at the end, so the uncompressed append-log and the finished `.zst` coexist
+  — ~2.1 GiB for CasualRO, the largest remaining. Budget ~5 GiB free, ~8 GiB comfortable.
+  After acquisition: `ingest_social.py`, then `compute_zipf.py --source social`, `merge.py`,
+  `build_lemma_layer.py`, `build_package.py`, `validate.py`. The 6th source makes the panel
+  ≥6, so the §8 trim branch (drop max and min) becomes the active path for the first time —
+  check 1's function-word band and check 2's concordance both need re-reading after it.
+
+- [ ] **`COMPRESS_EVERY = 250_000` in `fetch_social.py` is dead code.** Defined, never
+  read; `compress()` is called once per subreddit at the end of `fetch()`. Either wire it
+  up to compact incrementally (which would cap the transient peak above, and matters if a
+  subreddit ever dwarfs r/Romania) or delete the constant so it stops implying a buffering
+  behaviour that does not exist.

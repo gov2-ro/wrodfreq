@@ -21,6 +21,17 @@ and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the 
   `lemma_frequency` degrades gracefully to 0.0 — see open question 1, which is why.
 - **M7 done**: `~/devbox/otios/validate_with_wrodfreq.py` exists, wROdfreq is an editable
   dependency there, staged as a standalone CSV — not wired into oțios's scoring.
+- **In flight, and the only unfinished work: `social`, a 6th source.**
+  `build/fetch_social.py` is acquiring 15 Romanian subreddits over Arctic Shift HTTP.
+  r/Romania comments are **complete** (12,050,513 records back to 2010-03-30); r/Romania
+  posts stopped at 255,000 records back to 2022-02-06 and the other 14 subreddits have not
+  started. Nothing is running — a reboot ended it, which `run_social_fetch.sh` documents as
+  the one thing it does not survive. Resume with
+  `nohup build/run_social_fetch.sh > /dev/null 2>&1 &`; `--resume` skips what is `done`.
+  Disk is the binding constraint, not time — see the `BACKLOG.md` entry for the measured
+  budget (~5 GiB free, ~8 GiB comfortable). When this lands the panel is ≥6 sources and
+  spec §8's trim branch goes live for the first time, so `validate.py` checks 1 and 2 want
+  re-reading rather than assuming.
 
 ## Open questions — need your decision, not more building
 
