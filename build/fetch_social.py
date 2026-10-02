@@ -238,11 +238,47 @@ def compress(ndjson_path: Path, zst_path: Path) -> None:
 # Fetch one subreddit
 # ---------------------------------------------------------------------------
 
+def rebuild_state_from_file(ndjson_path: Path, key: str) -> tuple[int, float | None, int]:
+    """Derive (count, oldest created_utc, byte length) from the append-log itself.
+
+    Needed when a checkpoint predates the `bytes` field (written by a version
+    before that existed) or is otherwise missing it. The temptation is to let
+    `bytes` default to 0, but then the resume check below sees the whole file as
+    "unaccounted" and truncates every record away while `before` stays put --
+    silently losing the span between `before` and now, which is never refetched.
+
+    A missing byte count is *unknown*, not zero. The file is the one thing that
+    cannot disagree with itself, so read the answer off it: scan complete lines
+    only, return the oldest timestamp seen, and report the offset of the last
+    complete line so a partial final write can be trimmed rather than parsed.
+    """
+    count = 0
+    oldest: float | None = None
+    good_bytes = 0
+    with ndjson_path.open("rb") as fh:
+        offset = 0
+        for raw in fh:
+            offset += len(raw)
+            if not raw.endswith(b"\n"):
+                break                      # torn final write; not a record yet
+            try:
+                rec = json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                break
+            ts = rec.get("created_utc")
+            if isinstance(ts, (int, float)):
+                oldest = ts if oldest is None else min(oldest, ts)
+            count += 1
+            good_bytes = offset
+    print(f"  [{key}] recovered from file: {count:,} records, "
+          f"{good_bytes:,} bytes", flush=True)
+    return count, oldest, good_bytes
+
+
 def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
     """Page back through one subreddit's history. Returns records written."""
     key = f"{subreddit}/{kind}"
     state = cp.setdefault(key, {"before": None, "count": 0, "done": False, "bytes": 0})
-    state.setdefault("bytes", 0)
     if state["done"]:
         print(f"  [{key}] already complete ({state['count']:,} records)", flush=True)
         return 0
@@ -254,7 +290,23 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
 
     if state["count"] == 0 and ndjson_path.exists():
         ndjson_path.unlink()          # stale partial from a discarded run
-    elif ndjson_path.exists() and ndjson_path.stat().st_size > state["bytes"]:
+    elif "bytes" not in state and ndjson_path.exists():
+        # Checkpoint from before `bytes` was tracked. Rebuild count/before/bytes
+        # off the file rather than defaulting bytes to 0, which would truncate
+        # the whole append-log away. See rebuild_state_from_file().
+        count, oldest, good_bytes = rebuild_state_from_file(ndjson_path, key)
+        if good_bytes < ndjson_path.stat().st_size:
+            with ndjson_path.open("r+b") as trunc:
+                trunc.truncate(good_bytes)
+        state["count"] = count
+        if oldest is not None:
+            # Resume strictly older than the oldest record actually on disk, not
+            # the stale `before`, which here is newer than the file's own tail
+            # and would refetch the difference.
+            state["before"] = oldest
+        state["bytes"] = good_bytes
+        save_checkpoint(cp)
+    elif ndjson_path.exists() and ndjson_path.stat().st_size > state.get("bytes", 0):
         # Records written after the last checkpoint but before the process
         # died. `before` was never advanced past them, so resuming would fetch
         # and append them a second time. Truncate back to the checkpointed
