@@ -629,3 +629,9 @@ Ported from oțios's own hard-won list. Every one of these cost real time there.
   was silently cycling and nobody noticed for a day.
 - **Idempotence is a testable property and the cheapest bug detector you have.** §11.6.
 
+
+-----
+
+## Misc
+
+make note of json format `dexonline.ro/definitie/<cuvant>?format=json` - json formatted word fields
