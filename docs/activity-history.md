@@ -1174,3 +1174,28 @@ forwards; a torn final line (truncated, or complete JSON with no newline) is tri
 rather than parsed; the normal path with `bytes` present still truncates the unaccounted
 tail and leaves an exact match alone; and `done: true` entries are skipped without being
 truncated, recovered or saved.
+
+## 2026-10-02 — B3: should zipf_frequency tokenize its argument? (measurement + proposal)
+
+Ran Brief B3 against wordfreq 3.1.1 as the oracle. Note for the record: the oracle lives
+in oțios's venv, not this repo's `.venv` (which has no `wordfreq`) — the same place
+`validate.py` already reaches for it. Read its `_word_frequency` and confirmed by calling
+it on ~45 input shapes: it tokenizes, returns `minimum` for zero tokens or if *any* token
+is missing, and otherwise combines tokens harmonically (`1/f = sum 1/f_i`), so a phrase
+is always rarer than its rarest word — not first, not min, not a mean.
+
+The divergence is wider than the one `spune-` example. Besides edge hyphens and
+multi-word strings, wordfreq splits compounds we keep whole (`mass-media`), scores
+numerals (`123` -> 3.92; our tokenizer excludes them by design), and answers
+foreign-diacritic words (`café` 3.44) that our character class shreds into fragments.
+Tokenize-first with our own tokenizer would therefore *fabricate* answers for those last
+two unless unconsumed letters/digits make the answer 0.0. Also found 225 legacy table
+rows (apostrophe-edged, `acu'`) that re-tokenizing cannot reach, so the proposal tries
+the exact key first.
+
+The real finding is three conflicts with the project's own contract, written up in
+`docs/BACKLOG.md` and deliberately not resolved: tokenizing breaks the identity
+`zipf == 0.0 <=> frequency_detail is None`; numerals force a choice between a numeral
+model and a permanent divergence; foreign diacritics belong to B2. No shipped behaviour
+changed; the proposal is encoded as skipped `test_b3_*` tests in `tests/test_api.py`.
+No existing test or `validate.py` check depends on the current behaviour.

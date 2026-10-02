@@ -485,14 +485,90 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   combining-form question got.
 
 - [ ] **`zipf_frequency` does not tokenize its argument; wordfreq's does.** Noted
-  2026-09-18, no action taken — flagging a real difference in the drop-in
-  contract (spec §10.1), not asserting it is wrong. Ours normalizes and looks
-  up one key, so `zipf_frequency('spune-')` finds the stored row (or 0.0);
-  wordfreq tokenizes first, so it answers 5.78 — the value for `spune`.
-  Likewise `-adevăr` -> 5.03 (`adevăr`). For well-formed single words, which
-  is what the API is for, the two agree exactly; they diverge only on input
-  that isn't a single token. Worth a deliberate decision before 1.0: matching
-  wordfreq here means deciding what a multi-token argument should return.
+  2026-09-18; measured 2026-10-02 (Brief B3) against wordfreq 3.1.1 (the copy in
+  `~/devbox/otios/.venv` — the one `validate.py` uses; this repo's `.venv` has no
+  wordfreq). **Proposal only — nothing changed; Opus decides.**
+
+  *What wordfreq does* (`_word_frequency`, `wordfreq/__init__.py:~237`): tokenize;
+  **zero tokens -> `minimum`**; look each token up (digit runs are smashed to `0`s
+  and scored by a digit-frequency model); **any token missing -> `minimum`** for
+  the whole string; otherwise combine **harmonically**, `1/f = 1/f1 + 1/f2 + ...`
+  (not first, not min, not mean — always below the rarest token), round to 3
+  significant digits, then `zipf_frequency` rounds to 2 decimals. Ours: normalize,
+  one exact key lookup, no tokenization.
+
+  Divergence table (value differences on well-formed words, e.g. `de` 7.72 vs
+  7.70, are the data, not this issue; shown as wordfreq / ours):
+
+  | Input | Our tokenizer yields | wordfreq | ours now |
+  |---|---|---|---|
+  | `de`, `De`, `DE`, `ţară` | 1 token | answers | answers (agree on shape) |
+  | `spune-`, `-adevăr`, `pământ-` | 1 (edge hyphen dropped) | answers for the stem (5.78, 5.03, 5.12) | 0.0 |
+  | `(de)`, `'de'`, `  de  ` | 1 | 7.72 | 0.0 |
+  | `de la`, `de,la`, `de\nla` | 2 | 7.09 (harmonic) | 0.0 |
+  | `de la cu` | 3 | 6.77 | 0.0 |
+  | `spune--mi`, `într-o`, `n-am` | 2 (elision split) | 5.58, 6.04, 6.00 | 0.0 |
+  | `de cuvântcarenuexista` | 2, one unknown | 0.0 (`minimum`) | 0.0 (agree) |
+  | `mass-media`, `site-ul`, `e-mail` | 1 (kept joined, in table) | splits and combines: 4.41, 5.18, 4.45 | exact row: 4.36, 4.90, 4.32 |
+  | `d'ale` | 1 (kept joined) | splits: 5.71 | exact row: 2.18 |
+  | `''`, `'   '`, `'...'`, `'!?'` | 0 | 0.0 | 0.0 (agree) |
+  | `123`, `1990`, `3.14`, `50%`, `$5` | 0 (numerals excluded by construction) | **3.92, 4.63, 2.26, 4.85, 5.81** | 0.0 |
+  | `de 123` | 1 (`de`) | 3.92 | 0.0 |
+  | `covid-19`, `a1b` | 1 / 2 (`a`,`b`) | 0.0 | 0.0 (agree; ours would combine fragments `a`+`b` if tokenized — wrong) |
+  | `café`, `naïve` (foreign diacritics) | `caf` / `na`,`ve` (letters silently dropped) | 3.44 / 0.0 | 0.0 |
+  | `ro.wikipedia.org` | 3 | 0.0 (one token, not in list) | 0.0 |
+  | `minimum=2.0` with any unknown/zero-token input | | returns 2.0 | returns 2.0 (agree) |
+
+  **Proposed behaviour** (API layer only, using `wrodfreq.tokenizer.tokenize`;
+  `word_frequency` has the same issue and must combine in the *linear* domain,
+  not by round-tripping through the 2-decimal zipf):
+  1. Normalize, try the **exact key first**. A hit returns as today. Reason:
+     keeps compounds (`mass-media`) and the 225 legacy rows that re-tokenizing
+     cannot reach (190 trailing-`'` such as `acu'`, 35 leading-`'`) answerable.
+  2. Otherwise tokenize. **Zero tokens -> 0.0 (`minimum`)**, as wordfreq.
+  3. **One token -> its row** (`spune-`, `(de)`, `'de'`, `DE`): the edge
+     punctuation is not part of the word.
+  4. **Two or more tokens -> harmonic combination, linear domain, any unknown
+     token -> 0.0 (`minimum`)**, round to 2 decimals: matches wordfreq's
+     mechanism exactly; spreads the elision splits (`într-o`) the same way.
+  5. **Do not silently drop content.** If the argument contains letters or digits
+     our tokenizer did not consume (`café`, `naïve`, `a1b`, `de 123`) answer
+     0.0 rather than combining the surviving fragments (`caf`, `na`+`ve`) —
+     tokenize-first with *our* tokenizer would otherwise fabricate answers.
+  Extensions (`frequency_detail`, `by_source`, `lemma_frequency`) keep the
+  exact-lookup, single-row behaviour (see conflict A).
+
+  **CONFLICTS WITH THE PROJECT'S OWN CONTRACT — this is the decision, not
+  resolved above:**
+  - **A. `0.0` <=> `None` stops being the same fact.** Today
+    `zipf_frequency(w) == 0.0` exactly when `frequency_detail(w) is None`. After
+    tokenize-first, `zipf_frequency('spune-')` is 5.78 while
+    `frequency_detail('spune-')` is `None` (a multi-token string has no single
+    row, so no `n_reliable`/`spread` exist for it). Options: (i) leave the
+    extensions exact-lookup and document the asymmetry; (ii) make
+    `frequency_detail`/`by_source` also strip to a single token (`spune-` ->
+    `spune`'s detail) but stay `None` for 2+ tokens; (iii) don't tokenize at
+    all and document `zipf_frequency` as exact-key (breaks the "change one
+    import line" claim for non-single-token input).
+  - **B. Numerals.** wordfreq answers `123` with 3.92; our table excludes
+    numerals from numerator and denominator *by design*. Matching requires
+    either a numeral model (a spec §3 decision, borrows wordfreq's `digit_freq`)
+    or accepting a permanent divergence where we say 0.0 — which this project
+    otherwise reads as "never seen", not "not a word". `None` would be more
+    honest than `0.0` here but wordfreq's contract has no `None`.
+  - **C. Foreign diacritics (`café` 3.44 in wordfreq).** Matching needs a
+    wider token class — that is Brief B2's tokenizer decision, out of scope.
+    Rule 5 above is a stopgap that gives 0.0, not a match.
+  - Not a conflict, for the record: zero tokens (`''`, `'...'`) is 0.0 in both,
+    matching the existing expectation (the `''` -> 2.34 bug fix; the suite pins
+    only the tokenizer invariant "no empty token", not an API assertion).
+
+  Blast radius: no existing test or `validate.py` check depends on
+  non-tokenizing behaviour. `tests/test_api.py` calls the API only with
+  single well-formed tokens (`de`, `birjă`, `cuvântcarenuexista`); `validate.py`
+  never calls `wrodfreq.zipf_frequency` (it reads the DB, and calls
+  *wordfreq's* `zipf_frequency` on wordfreq's own list, all single tokens).
+  Proposal tests are in `tests/test_api.py`, all `skip`ped (`test_b3_*`).
 
 - [ ] **The web corpus tokenizes URL slugs and punycode into `merged`.**
   Measured 2026-09-21 while verifying the dash migration, which is how it
