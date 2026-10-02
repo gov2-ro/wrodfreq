@@ -1199,3 +1199,38 @@ The real finding is three conflicts with the project's own contract, written up 
 model and a permanent divergence; foreign diacritics belong to B2. No shipped behaviour
 changed; the proposal is encoded as skipped `test_b3_*` tests in `tests/test_api.py`.
 No existing test or `validate.py` check depends on the current behaviour.
+
+## 2026-10-02 — Foreign diacritics measured: the fragments are real, small, and not where the problem is
+
+Brief B2 asked whether the tokenizer's Romanian-only character class should widen to cover
+`ü ö é ç` and friends, which today split `Düsseldorf` into `d` + `sseldorf`. A measurement,
+not a change: no tokenizer, ingester or db write, with the db opened read-only throughout.
+
+The first obstacle was that the db cannot answer the question — `source_counts` holds only
+already-tokenized words, so the foreign characters are gone before a row is written. The
+measurement therefore re-read raw text with a Unicode-letter regex beside the production
+tokenizer: all of Wikipedia (442,389 docs, which matches `sources` exactly) and a 0.8%
+sample of CulturaX (~187M tokens, two shards). News, subs and eu have no raw text on disk,
+so their figures are extrapolations from how densely wiki-derived fragment types occur in
+their counts, and are labelled as such. The reference `wordfreq` is not in this repo's
+venv, only in oțios's; the brief said otherwise.
+
+Findings. Foreign-Latin words are 0.73% of wiki tokens and 0.125% of web, and shatter into
+1.86 fragments each, so fragments are 1.36% of wiki and 0.20% of web. In `merged`, 16,433
+rows (0.27%) are wiki-provable fragments, only 52 above Zipf 3.0. The earlier log entry's
+"single letters track wordfreq within 0.05" holds for `a o s v l m` and fails for the rest
+(`k` +0.37, `w` +0.35, `g` +0.34) — but excluding foreign words recovers only ≈0.02–0.07
+of that after the merge's trim (22 of 26 letters change at 2dp, `k` the most), so most of
+the gap is corpus composition. `wordfreq` does not fragment these words, so widening would
+raise comparability, the reverse of the worry in the brief. Latin-1 alone would be
+insufficient: it covers 75% of wiki's foreign-Latin occurrences, Latin-1 plus Extended-A/B
+98.7%.
+
+The surprise is in the web source: its top foreign character is `ã`, and 89% of those words
+become an established Romanian word on writing `ă` for it — `sã`, `cã`, `dupã`. Together
+with `ǎ ȋ ȃ þ` that is a legacy-encoding diacritic problem, 0.047% of web tokens, that moves
+real words by up to +0.58 Zipf, and widening would make `sã` a reliable entry of its own
+rather than fix anything. Recommendation to Opus: do not widen; treat legacy-variant
+normalization as its own decision (with `ã` ambiguous against Portuguese, 17% mapping in
+wiki). Findings are in `docs/BACKLOG.md`; measurement scripts stayed in scratch. About
+7 minutes of compute in total.

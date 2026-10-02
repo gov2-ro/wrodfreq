@@ -459,30 +459,103 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   worth reaching for first next time a migration touches a bounded row set.
 
 - [ ] **Non-Romanian diacritics split foreign words mid-token.** Mechanism
-  confirmed, magnitude bounded, deliberately not chased — logged so the next
-  person doesn't rediscover it from scratch. `_TOKEN_RE`'s character class is
-  `[a-zăâîșț]`, so any other diacritic terminates the match and restarts it:
+  confirmed; **measured 2026-10-02 (brief B2) — recommendation: do not widen the
+  class; decision still open.** `_TOKEN_RE`'s class is `[a-zăâîșț]`, so any other
+  letter terminates the match and restarts it:
 
       Düsseldorf -> ['d', 'sseldorf']      Köln   -> ['k', 'ln']
       Zürich     -> ['z', 'rich']          François -> ['fran', 'ois']
       Baden-Württemberg -> ['baden-w', 'rttemberg']
 
-  The tail fragments are real, reliable rows in `merged` (`nchen` 3.55,
-  `rich` 3.48, `sseldorf` 2.94, `rttemberg` 2.93, `rnberg` 2.84 — most
-  attested by all 5 sources), so this is genuine pollution, not a one-corpus
-  artifact. **But the leading fragments, which is where the damage would
-  actually show, are not detectably inflated**: our single-letter Zipf values
-  track wordfreq's own within ~0.05 for the common letters (`a` 7.43/7.45,
-  `s` 6.50/6.49, `l` 6.17/6.18, `m` 5.82/5.84, `v` 5.51/5.50). Single letters
-  are genuinely frequent in Romanian text and wordfreq agrees with us about
-  how frequent.
+  **Method and its limit.** `source_counts` holds only already-tokenized words,
+  so the foreign characters are gone from the db and the problem cannot be
+  measured there directly. Measured instead by re-reading raw text with a
+  Unicode-letter regex beside the production tokenizer: all of Wikipedia
+  (442,389 docs, 110.5M tokens, matches `sources`) and ~187M tokens of CulturaX
+  `web` (row groups from `ro_part_00000` and `ro_part_00040` — a 0.8% sample of
+  `web`, from two shards). News, subs and eu have no raw text on disk: their
+  figures below are extrapolated from the density of wiki-derived fragment
+  types in their `source_counts`, and are estimates. The db was opened
+  read-only. Wordfreq lives in oțios's venv, not this one.
 
-  So the cost is spurious *low-frequency* entries, not corrupted
-  high-frequency ones — the opposite of the elision bug, which wrecked `într`
-  at 3.45 vs its true 6.05. Widening the class to cover Latin-1 diacritics
-  would fix the fragments but changes what counts as a Romanian token, which
-  is a spec §3 decision and needs the same measure-first treatment the
-  combining-form question got.
+  **1. Volume.** Words containing a non-Romanian Latin letter: wiki 0.73% of
+  tokens (159,881 types), web sample 0.125% (62,179 types). They shatter into
+  1.86 fragments each, so fragment tokens are **1.36% of wiki and 0.20% of web**
+  (93,570 and 36,335 types). Estimated for news/subs ≈0.08%, eu ≈0.2%. In the
+  shipped db, the 19,203 "signature" fragment types (multi-letter, ≥90% of
+  their wiki occurrences foreign-derived — a lower bound, since it is wiki-only)
+  appear in 16,433 `merged` rows (0.27% of 6,050,327; 16,001 not DEX), 5,142 of
+  them with ≥3 reliable sources and 509 with all five. Their `merged` Zipf is
+  almost all in the long tail: 15,490 of 16,433 sit below 2.0, 232 at 2.5 or
+  above, **52 at ≥3.0** (33 of them non-DEX; `nchen` 3.55, `rich` 3.48, `sseldorf` 2.94 ...). By
+  per-source floor they are overwhelmingly "reliable" (11,132 of 19,203 clear
+  wiki's floor, 15,202 clear web's) — but web's floor is -0.68, so clearing it
+  means little. Pollution is real and cheap: ~0.3% of rows, almost none loud.
+  Non-Latin foreign scripts (Cyrillic, Greek, CJK) are not fragmented, they are
+  dropped whole: wiki 0.14% of tokens, web 0.04%, absent from numerator and
+  denominator alike.
+
+  **2. Displacement.** The earlier "single letters track wordfreq within 0.05"
+  was true only of the common letters and is **overturned for the rest**:
+  merged vs wordfreq is k +0.37, w +0.35, g +0.34, j +0.33, h +0.29, r +0.27,
+  t +0.22 (and a, o, s, v, y, l, m within 0.02). The fragments explain only a
+  minority of that. Recounting with foreign-Latin words excluded (numerator and
+  denominator), per-source single-letter Zipf shifts: wiki k −0.46, z −0.32,
+  r −0.31, g −0.25, t −0.22, b −0.17 (a, o, x, i ≈ 0); web k −0.13, z −0.10,
+  t −0.09, r −0.09, j −0.07. Every non-fragment word shifts by only +0.006
+  (wiki) / +0.001 (web), the denominator effect. Pushed through the merge's
+  trimmed mean (wiki/web measured, others extrapolated): **22 of 26 letters move
+  by ≥0.005 and so change at 2dp, 6 by ≥0.05, max k ≈0.07** — most of the
+  wordfreq gap on k/w/j/g/h is corpus composition, not fragments. Function
+  words are untouched (`a` −0.004, `o` −0.001, `x` 0.000 in wiki).
+
+  **3. Which characters.** By occurrences (wiki / web sample): é 175k / 25k,
+  á 104k / 16k, ü 67k / 8k, ö 55k / 6k, ó 47k / 9k, è 37k / 5k, í 31k / 5k,
+  š 29k / 2k, ä 29k / 5k, ć, ç, č, ı, ł, ô, ž ... Latin-1 (≤U+00FF) covers only
+  **75% of wiki's and 83% of web's** foreign-Latin occurrences; Latin-1 +
+  Extended-A/B (≤U+024F) covers 98.7% / 98.8%, so a "Latin-1 widening" is not
+  actually sufficient (Polish/Czech/Turkish/Hungarian proper nouns). Wiki's are
+  genuine foreign names (münchen, josé, françois, köln, zürich, lászló). **Web's
+  are largely Romanian typed wrongly**: `ã` is the top foreign character in
+  web (13,690 types, 87,914 occurrences = 0.047% of tokens, 89% of which become
+  an established Romanian word on substituting `ă` — `sã`, `cã`, `dupã`,
+  `aceastã`); `ǎ` (94% ok), `ȋ`→`î` (95%), `ȃ`→`â` (90%) and `þ`→`ț` (72%)
+  likewise. Half (50.6%) of web's foreign-Latin occurrences have a common
+  Romanian word as their accent-stripped form, vs 9.2% in wiki. In wiki `ã` is
+  Portuguese (`são`, 17% map to a RO word), so a blanket `ã→ă` is not free.
+
+  **4. Cost of widening.** Admitted as new tokens in place of fragments: in
+  wiki 96,902 types / 583k occurrences of Latin-1 letters (85% of the types
+  under 5 occurrences) and 55,639 types / 201k beyond Latin-1 (88% under 5);
+  in web 26,840 / 89k and 15,360 / 41k (89–91% under 5). A further
+  mojibake-prone slice (`å ÿ ð ý þ æ`: wiki 3,641 types, web 6,701, 88–89%
+  under 5 occurrences; `åÿi` is in web's top foreign words) and ~9k–32k words
+  with ≥2 distinct foreign characters. Mostly hapax, which the
+  `MIN_OCC_PER_SOURCE` abstention keeps out of `merged` — but the wrong-keyboard
+  words (`sã`) would become **their own reliable, high-count entries**
+  rather than fixing the fragment `s`: widening trades one kind of junk for
+  another there. Normalizing the legacy variants in `normalize()` would do the
+  job properly, but that is a different change.
+
+  **5. wordfreq.** It does not fragment: `tokenize('Düsseldorf','ro')` →
+  `['düsseldorf']`, `Köln`, `Zürich`, `François`, `München`, `Škoda`, `Łódź`
+  all whole; `Baden-Württemberg` → `['baden', 'württemberg']`. And
+  `zipf_frequency('nchen','ro')`, `sseldorf`, `rnberg`, `rttemberg` are all 0.0
+  there (we ship 3.55, 2.94, 2.84, 2.93). So widening would *increase*
+  comparability, not reduce it — the opposite of the worry in the brief. It is
+  not a strong argument: the Spearman gate covers only wordfreq's range, where
+  the fragments are absent.
+
+  **Recommendation: do not widen.** Re-ingest cost is days (`web` alone), for
+  a measured benefit of ≈0.02–0.07 on 22 rare letters' Zipf, 52 `merged` rows
+  at ≥3.0 (16,433 rows overall, 0.27%), and nothing on any function word or
+  common letter. The harder question the numbers raise is the *legacy-diacritic
+  normalization* (`ã ǎ ȋ ȃ` → `ă î â`, perhaps `þ`→`ț`): it moves real words
+  (web: 3,214 Romanian words gain ≥0.005 Zipf, up to +0.58 for `învătământ`;
+  `ã`-fragments are 0.047% of web tokens, ~11M occurrences at scale), and
+  belongs in the same decision — see `normalize()`. If a re-ingest is ever
+  forced for another reason, fold that in. Scripts kept in the scratchpad, not
+  committed. Timing: wiki 129 s, web ~255 s of streaming, db queries ~2 s.
 
 - [ ] **`zipf_frequency` does not tokenize its argument; wordfreq's does.** Noted
   2026-09-18; measured 2026-10-02 (Brief B3) against wordfreq 3.1.1 (the copy in
