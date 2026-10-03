@@ -1,14 +1,14 @@
 # wROdfreq
 
-A Romanian word-frequency table on the Zipf scale, built from 5 open corpora (27.8B
-tokens total), designed to ship as `pip install wrodfreq` with an API that is drop-in
+A Romanian word-frequency table on the Zipf scale, built from 5 open corpora (28.2B
+tokens total; a 6th is being acquired), designed to ship as `pip install wrodfreq` with an API that is drop-in
 compatible with [`wordfreq`](https://github.com/rspeer/wordfreq) — plus the raw SQLite
 for researchers.
 
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
 > are done — 5-source panel ingested, merged, packaged, and validated
-> (`build/validate.py`: 4/5 checks pass, one open issue tracked in
-> [`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md)). Verified against a real, isolated
+> (`build/validate.py`: **6/6 checks pass**, including byte-identical rebuilds).
+> 6,050,118 words; 224 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
 
@@ -37,7 +37,7 @@ the word is rare there. A source that abstains is a different claim from a sourc
 reports zero, and this table keeps the two apart (see `docs/wrodfreq-spec.md` §8.1).
 
 `lemma_frequency()` also exists but currently always returns `0.0` — the DEX-derived
-paradigm rollup is built and validated (180,820 lemmas) but not shipped in the package
+paradigm rollup is built and validated (180,539 lemmas) but not shipped in the package
 yet, pending confirmation of DEX Online's redistribution terms. See
 [`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md).
 
@@ -46,12 +46,71 @@ yet, pending confirmation of DEX Online's redistribution terms. See
 ```bash
 git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
 uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
-python -m pytest tests/ -q       # 43 tests — pass with no data files at all
+python -m pytest tests/ -q       # 224 tests — pass with no data files at all
 # Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
 # most people will want data/wrodfreq.db as a release asset once one exists, and
 # just run:
 python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
 ```
+
+---
+
+## What it's for
+
+The distinctive assets are the ones worth building on: **6,050,118 words** rather than
+`wordfreq`'s "small" list, a floor far below Zipf 3.0, per-source retention
+(`n_reliable` / `n_attesting` / `spread` / `by_source`), six registers with period tags,
+and a lemma layer kept separate from surface forms.
+
+### Where it does something nothing else can
+
+**Lexicography.** The table computes DEX lemma coverage at 97.7%. Invert that both ways:
+dictionary headwords with *no* corpus attestation are candidates for an
+obsolete/literary marking, and corpus words absent from DEX are candidates for inclusion
+(`clujean`, `selfie`, `covid`). Both directions are concrete worklists, not statistics.
+
+**Psycholinguistics and experiment design.** Frequency is the strongest single predictor
+of lexical decision latency, and Romanian researchers have thin options. Two things a
+single frequency number cannot give you: matching stimuli on frequency *while
+controlling for register-boundness* via `spread`, and `build_info()` exposing the exact
+corpus panel so a paper can cite a reproducible build. That citability is a design
+decision, not a side effect — `MINOR` changes whenever the panel does.
+
+**Pedagogy, using `spread` properly.** Frequency-ordered vocabulary lists are the obvious
+use. The non-obvious one: a learner should get high-frequency **low-spread** words first.
+Words common *everywhere* are core vocabulary; high-spread words are common in one
+register only, and teach a dialect rather than the language.
+
+**Diacritic restoration and OCR correction.** Deciding whether `sa` should be `să` or
+`sa` is a frequency-ranking problem with per-register priors. Note the caveat in
+[`docs/decisions/ADR-002-foreign-diacritics-and-legacy-variants.md`](docs/decisions/ADR-002-foreign-diacritics-and-legacy-variants.md):
+legacy-variant encoding affects exactly this use case and is a known-wrong area.
+
+### Conventional, but well served
+
+- **Readability scoring** — per-register frequencies say a text sits at subtitle level
+  versus EU-legal level, instead of producing one opaque number.
+- **NLP preprocessing** — vocabulary thresholds, OOV analysis, subword tokenizer
+  training, spellcheck and autocomplete candidate ranking.
+- **Terminology extraction** — high `spread` *is* the topic-bound-jargon signal, so it
+  falls out for free.
+- **Neologism and loanword tracking** — open vocabulary plus period tags is what makes
+  `selfie` and `clujean` visible at all; a dictionary-filtered vocabulary makes them
+  structurally invisible.
+- **Morphological analysers** — frequency is the standard prior for ranking competing
+  analyses of an ambiguous form. See the LexicRo note in
+  [`docs/BACKLOG.md`](docs/BACKLOG.md).
+
+### What it is not
+
+Not a lemmatizer, tagger, or corpus distribution. It answers *how common is this word*,
+and keeping the API small is why it answers it well. The lemma layer is also **not yet
+shipped** — 180,539 validated lemma frequencies exist locally, but `lemma_frequency()`
+returns `0.0` in the package pending the DEX Online conversation, so lemma-level uses are
+real but gated.
+
+In one sentence: **it tells you not just how common a Romanian word is, but how much the
+corpora agree — and for a rare word, agreement is the more useful number.**
 
 ---
 
