@@ -1,6 +1,6 @@
 # Brief B1 — regression tests for `fetch_social.py` checkpoint recovery
 
-**Owner:** Sonnet. **Status:** ready. **Written:** 2026-10-02 by Opus.
+**Owner:** Sonnet. **Status:** DONE 2026-10-02 (22e9205). **Written:** 2026-10-02 by Opus.
 
 ## The question
 

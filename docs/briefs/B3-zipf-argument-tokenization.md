@@ -1,6 +1,6 @@
 # Brief B3 — should `zipf_frequency` tokenize its argument?
 
-**Owner:** Sonnet. **Status:** ready. **Written:** 2026-10-02 by Opus.
+**Owner:** Sonnet. **Status:** DONE 2026-10-02 (968666d) — decided in ADR-001. **Written:** 2026-10-02 by Opus.
 **This is a measurement plus a design proposal. Do not change shipped behaviour; Opus decides.**
 
 ## The question

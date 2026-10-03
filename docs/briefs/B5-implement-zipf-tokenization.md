@@ -1,6 +1,6 @@
 # Brief B5 — implement ADR-001: tokenize the argument, migrate the apostrophe residue
 
-**Owner:** Sonnet. **Status:** ready. **Written:** 2026-10-02 by Opus.
+**Owner:** Sonnet. **Status:** DONE 2026-10-02 (66b5f7c). **Written:** 2026-10-02 by Opus.
 **Read `docs/decisions/ADR-001-zipf-argument-tokenization.md` first — it is the decision
 this brief implements, and its reasoning answers most "why not instead…" questions.**
 

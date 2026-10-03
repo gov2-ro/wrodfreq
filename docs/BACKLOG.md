@@ -893,9 +893,11 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   per subreddit at the end, so the uncompressed append-log and the finished `.zst` coexist
   — ~2.1 GiB for CasualRO, the largest remaining. Budget ~5 GiB free, ~8 GiB comfortable.
   After acquisition: `ingest_social.py`, then `compute_zipf.py --source social`, `merge.py`,
-  `build_lemma_layer.py`, `build_package.py`, `validate.py`. The 6th source makes the panel
-  ≥6, so the §8 trim branch (drop max and min) becomes the active path for the first time —
-  check 1's function-word band and check 2's concordance both need re-reading after it.
+  `build_lemma_layer.py`, `build_package.py`, `validate.py`. The 6th source makes the panel ≥6.
+  The §8 trim branch is **already the active path** (69,939 rows have `n_reliable=5`), so this
+  does not newly reach it; it means the trim drops max and min from 6 values leaving 4 to mean
+  rather than 3, and more words clear the ≥5 threshold. Check 1's function-word band and
+  check 2's concordance still need re-reading after it.
 
 - [ ] **`COMPRESS_EVERY = 250_000` in `fetch_social.py` is dead code.** Defined, never
   read; `compress()` is called once per subreddit at the end of `fetch()`. Either wire it

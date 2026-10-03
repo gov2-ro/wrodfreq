@@ -27,8 +27,10 @@ and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the 
   started. Resume after any reboot with
   `nohup build/run_social_fetch.sh > /dev/null 2>&1 &` — `--resume` skips what is `done`.
   Disk is no longer the constraint (~20 GiB free against a ~3.9 GiB transient peak).
-  When it lands the panel is ≥6 sources and spec §8's trim branch goes live for the first
-  time, so `validate.py` checks 1 and 2 want re-reading rather than assuming.
+  When it lands the panel is ≥6 sources. Note the trim branch is **already active** — 69,939 rows
+  have `n_reliable=5` today — so a 6th source does not newly reach it; what changes is
+  that the trim drops max and min from 6 values leaving 4 to mean instead of 3, and more
+  words clear the ≥5 threshold at all. `validate.py` checks 1 and 2 still want re-reading.
 - **`merged` is 6,050,118 rows** (was 6,050,327; the apostrophe migration closed a residue
   class). **224 tests**, `validate.py` **5/5** with check 6 byte-identical.
 

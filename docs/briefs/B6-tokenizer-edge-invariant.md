@@ -1,6 +1,6 @@
 # Brief B6 — the hyphen-split path can still emit apostrophe-edged tokens
 
-**Owner:** Sonnet. **Status:** ready. **BLOCKS `ingest_social.py`.** **Written:** 2026-10-02 by Opus.
+**Owner:** Sonnet. **Status:** DONE 2026-10-02 (112739d). **BLOCKS `ingest_social.py`.** **Written:** 2026-10-02 by Opus.
 
 ## Why this blocks the social ingest
 

@@ -1,6 +1,6 @@
 # Brief B2 — do non-Romanian diacritics need to be in the tokenizer's character class?
 
-**Owner:** Sonnet. **Status:** ready. **Written:** 2026-10-02 by Opus.
+**Owner:** Sonnet. **Status:** DONE 2026-10-02 (9244e61) — decided in ADR-002. **Written:** 2026-10-02 by Opus.
 **This is a measurement, not a change. Deliver numbers and a recommendation; Opus decides.**
 
 ## The question
