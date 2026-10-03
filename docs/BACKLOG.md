@@ -913,3 +913,48 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   each changed piece through the regex and the split to a fixed point, so every emitted
   token `t` satisfies `tokenize(t) == [t]`. Asserted by a property test over adversarial
   soup. No data migration was needed: all 6,050,118 `merged` keys reproduce exactly.
+
+- [ ] **`sources.period_note` for `social` must carry the independence and composition
+  claim — write it from a full run of `build/measure_social_independence.py`, not from
+  the sampled numbers below.** Spec rule: `documents` is an independence claim, and where
+  a corpus has few authors you count them and say so. The cautionary case is LUMRO (175
+  novels, 111 authors, 638 of 1,425 rare words from one person). A 15-subreddit source
+  needs the same treatment for two reasons, and the second one is easy to miss.
+
+  **1. Is it one community under 15 names?** Measured 2026-10-03 on the newest 150,000
+  comments of each of the first four subreddits — the same recent window for each, so the
+  comparison is fair:
+
+  | vs r/Romania | shared authors | Jaccard | share of smaller sub |
+  |---|---|---|---|
+  | CasualRO | 6,425 | 0.235 | 33.5% |
+  | programare | 4,390 | 0.173 | 29.0% |
+  | Bucuresti | 5,477 | 0.206 | 31.2% |
+
+  **No — roughly 70% of each subreddit's authors never post in r/Romania**, and author
+  concentration is healthy (top 100 authors appear in ~2% of (subreddit, author) pairs,
+  nothing like LUMRO). Marginal reliable vocabulary is still climbing at the fourth
+  subreddit: 38,844 types from r/Romania alone, then +46.7%, +23.5%, +15.8%. So the panel
+  is genuinely multi-community and more subreddits were worth the hours.
+
+  **2. Nine of the fifteen are city subreddits**, which skews toponyms relative to
+  national usage. r/Bucuresti alone contributes 847 reliable types that appear in no other
+  subreddit, and they are overwhelmingly Bucharest street and neighbourhood names
+  (`străulești`, `giurgiului`, `oltenitei`, `dămăroaia`, `băzilescu`, `tpbi`), mixed with
+  genuine common nouns that only surface in urban-planning talk (`patinoar`, `suprateran`,
+  `riveran`). This is real vocabulary and should **not** be pruned — a Romanian frequency
+  table that cannot price `giurgiului` has a gap. But a reader has to be told, because
+  `social` is one source of six, so a Bucharest street name lands at `n_reliable = 1` with
+  a high `spread`, and check 5's top-by-spread report is where it will surface.
+
+  `period_note` therefore states: the subreddit list; that 9 of 15 are city subreddits and
+  toponyms are consequently over-represented; the distinct-author count and the top-100
+  concentration; and the measured cross-subreddit author overlap. Follow the existing
+  `subs` and `eu` notes for tone — they already disclose what `documents` does and does
+  not count.
+
+  Incidental, and independent confirmation of
+  `docs/decisions/ADR-002-foreign-diacritics-and-legacy-variants.md`: `straulesti` and
+  `străulești` both appear as separate reliable types in the same sample. The social source
+  will carry the legacy-diacritic split too, so the +0.58 Zipf figure in that ADR is not
+  confined to `web`.
