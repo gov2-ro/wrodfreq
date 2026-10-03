@@ -959,55 +959,24 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   will carry the legacy-diacritic split too, so the +0.58 Zipf figure in that ADR is not
   confined to `web`.
 
-- [ ] **LexicRo — complementary Romanian NLP API; evaluate what we can use, and what we
-  can offer.** <https://lexicro.com/> · author's write-up:
-  <https://dev.to/peterabolins/building-the-romanian-nlp-api-that-should-already-exist-2gg7>
-  (read 2026-10-03). The owner has had a brief exchange with the author and intends to
-  offer wROdfreq's results for integration.
+- [ ] **LexicRo — evaluate what we can use, and what we can offer.**
+  Full evaluation: **[`docs/lexicro-evaluation.md`](lexicro-evaluation.md)**.
+  <https://lexicro.com/> — a hosted Romanian morphological-analysis API (lemma, POS,
+  features, conjugation) on a fine-tuned `bert-base-romanian-cased-v1`; code MIT. The
+  owner has had a brief exchange with the author and intends to offer wROdfreq's results
+  for integration.
 
-  **What it ships:** a morphological analyser (`POST /analyze` → lemma, POS, case, gender,
-  number, person, tense per token) and a conjugation engine (`GET /conjugate/{verb}`, seven
-  moods), on `bert-base-romanian-cased-v1` fine-tuned for morphological tagging, served via
-  FastAPI/Docker. Code MIT; model weights "still being worked out"; hosted freemium, free
-  tier 1,000 req/day.
+  The fit is disjoint: it does the morphology this project explicitly refuses to do, and
+  has no frequency data, which is all this project does. Three things worth taking, in the
+  doc with their caveats — the headline one being **MULTEXT-East (428k word forms,
+  CC BY-SA 4.0)**, a clearly licensed morphological lexicon where the lemma layer's blocker
+  is that `inflected_forms.db` is DEX-derived with unresolved terms. Not a free fix:
+  coverage drops from 2,269,003 forms to 428k, the resource is weakest on modern vocabulary
+  where open vocabulary is the point, and share-alike may bind the shipped data file —
+  which cannot even be assessed yet, because **this project has no `LICENSE` file and no
+  `license` field in `pyproject.toml`**. That is a prerequisite.
 
-  **The fit is near-exact and non-overlapping.** It does morphology, which this project
-  explicitly is *not* (not a lemmatizer, not a tagger). It has **no word-frequency data**,
-  which is all this project does. Neither duplicates the other.
-
-  **Three things worth taking from it, in order of value:**
-
-  1. **MULTEXT-East Romanian word-form lexicon — 428k entries, CC BY-SA 4.0.** This is the
-     interesting one, because it is a *clearly licensed* morphological lexicon and the
-     lemma layer's blocker is precisely that `inflected_forms.db` is DEX-derived with
-     unresolved redistribution terms (which is why `lemma_frequency()` ships as `0.0`). A
-     MULTEXT-East-derived paradigm map might be shippable where the DEX one is not.
-     **Do not treat this as a free fix.** Three real caveats: 428k word forms against DEX's
-     2,269,003 inflected forms, so coverage drops a lot and must be measured before anything
-     is promised; MULTEXT-East is an older resource, so modern vocabulary will be weakest
-     exactly where open vocabulary matters most; and **CC BY-SA is share-alike**, so a
-     shipped data file incorporating it may have to be CC BY-SA too — which this project
-     cannot currently reason about, because **it has no `LICENSE` file and no `license`
-     field in `pyproject.toml`.** Fix that first; it is a prerequisite, not a detail.
-  2. **UD Romanian RRT treebank — 9.5k sentences, CC BY-SA 4.0.** Gold tokenization, so a
-     candidate for a 7th `validate.py` check against an external reference. Expect
-     convention mismatches (UD splits clitics where a frequency table may not), so the
-     check would assert an agreed subset, not identity — scoping that is the work.
-  3. **The morphological tagger as a better ambiguity split.** Spec §9 splits an ambiguous
-     form across candidate lemmas weighted by each lemma's own headword frequency — a
-     prior. A tagger could split by *observed in-context* distribution instead, which is
-     strictly better evidence, and 200,601 of the form→lemma rows are ambiguous. But it
-     would mean running a BERT model over 28.2B tokens, and it imports a tagger dependency
-     into a project whose whole discipline is not being one. Record as the principled
-     alternative; do not pursue without a measurement showing the prior is actually wrong.
-
-  **What to offer in return:** per-surface-form and per-lemma frequency to return alongside
-  `/analyze`'s lemma and POS, and `n_reliable`/`spread` as a ranking prior when a form has
-  several possible analyses — frequency is the standard disambiguation signal and they have
-  none.
-
-  **Ask the author one question first.** LexicRo is built on DEXonline (313k+ lemmas) and
-  RoLEX (330k entries), and its own site states licensing for MULTEXT-East and UD RRT but
-  **not** for those two. So the author has already met this project's deferred blocker. How
-  they resolved it — a licence grant, an arrangement with dexonline.ro, or an open
-  question — is directly useful intel, and worth asking plainly rather than inferring.
+  One thing to raise with the author: LexicRo is built on DEXonline and RoLEX but states
+  licensing only for MULTEXT-East and UD RRT, so its author has already met this project's
+  deferred DEX blocker from the same direction. How they resolved it may unblock
+  `lemma_frequency()` outright.

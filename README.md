@@ -98,8 +98,8 @@ legacy-variant encoding affects exactly this use case and is a known-wrong area.
   `selfie` and `clujean` visible at all; a dictionary-filtered vocabulary makes them
   structurally invisible.
 - **Morphological analysers** — frequency is the standard prior for ranking competing
-  analyses of an ambiguous form. See the LexicRo note in
-  [`docs/BACKLOG.md`](docs/BACKLOG.md).
+  analyses of an ambiguous form. See
+  [`docs/lexicro-evaluation.md`](docs/lexicro-evaluation.md).
 
 ### What it is not
 
