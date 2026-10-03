@@ -224,15 +224,23 @@ def clean_markdown(text: str) -> str:
     return text
 
 
+def _one_line(text: str, width: int = 90) -> str:
+    """Flatten whitespace so a multi-line comment prints as one example line."""
+    return " ".join(text.split())[:width]
+
+
 def language_signals(tokens: list[str]) -> tuple[int, int, int]:
-    """(romanian marker hits, english marker hits, tokens carrying a diacritic)."""
+    """(romanian marker hits, english marker hits, non-marker tokens carrying a diacritic)."""
     ro = en = dia = 0
     for t in tokens:
         if t in RO_MARKERS:
             ro += 1
         elif t in EN_MARKERS:
             en += 1
-        if not _DIACRITICS.isdisjoint(t):
+        # A marker that happens to carry a diacritic (`mă`, `și`) is already
+        # counted above; counting it again would let one word pass the
+        # two-signal rule on its own.
+        if t not in RO_MARKERS and not _DIACRITICS.isdisjoint(t):
             dia += 1
     return ro, en, dia
 
@@ -497,9 +505,9 @@ def calibrate(files: list[Path], sample: int) -> int:
                 kept += 1
                 kept_tokens += len(tokens)
                 if len(examples_kept) < 5 and len(tokens) >= 8:
-                    examples_kept.append(f"[ro={score} en={en} n={len(tokens)}] {text[:90]}")
+                    examples_kept.append(f"[ro={score} en={en} n={len(tokens)}] {_one_line(text)}")
                 if score == 2 and en > 0 and len(examples_close) < 5:
-                    examples_close.append(f"KEPT  [ro={score} en={en}] {text[:90]}")
+                    examples_close.append(f"KEPT  [ro={score} en={en}] {_one_line(text)}")
             else:
                 dropped += 1
                 if len(tokens) < MIN_TOKENS_FOR_LANGID:
@@ -518,9 +526,9 @@ def calibrate(files: list[Path], sample: int) -> int:
                 else:
                     drop_reason["only one Romanian signal"] += 1
                 if len(examples_dropped) < 5 and len(tokens) >= 8:
-                    examples_dropped.append(f"[ro={score} en={en} n={len(tokens)}] {text[:90]}")
+                    examples_dropped.append(f"[ro={score} en={en} n={len(tokens)}] {_one_line(text)}")
                 if score == 1 and en == 0 and len(examples_close) < 10:
-                    examples_close.append(f"DROPPED [ro={score} en={en}] {text[:90]}")
+                    examples_close.append(f"DROPPED [ro={score} en={en}] {_one_line(text)}")
 
     total = kept + dropped
     if not total:
