@@ -83,7 +83,6 @@ PAGE_LIMIT     = 100      # server caps here; larger values return nothing
 PAGE_DELAY     = 0.25     # seconds between pages, on top of any rate-limit wait
 MAX_BACKOFF    = 300.0
 MAX_ATTEMPTS   = 8        # then hand back to the restart loop, see get_page()
-COMPRESS_EVERY = 250_000  # records buffered to the .ndjson before compacting
 
 USER_AGENT = ("wrodfreq/0.1 (Romanian word-frequency corpus; "
               "https://github.com/gov2-ro/wrodfreq; pax@mioritics.ro)")

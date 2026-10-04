@@ -690,7 +690,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   compound appears across many documents, a slug appears in one page's
   boilerplate many times. Nobody has measured that split yet.
 
-- [ ] **`social` source (Romanian subreddits) — ingester written and tested,
+- [x] **`social` source (Romanian subreddits) — ingester written and tested,
   waiting on the data download.** Started 2026-09-21. `build/ingest_social.py`
   is complete, tested end to end against a synthetic dump, and blocked only on
   a manual torrent fetch (see below). Chosen over `books` because `books` is
@@ -785,6 +785,8 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   100+. The ingester takes a directory, so widening is free — worth measuring
   the token gain against the language-filter noise before hauling more down.
 
+  **DONE 2026-10-04.** Superseded: data fetched via `fetch_social.py` (not the torrent) and ingested 2026-10-04.
+
 - [x] **CI exists — added 2026-09-21.** Spec §11's heading is literally
   "Validation — the stage that will be skipped, so make it CI", §13's M6
   criterion was "validation checks 1-4 and 6 pass in CI", and CLAUDE.md says
@@ -828,7 +830,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   166 tests, passing in a clean clone with no build artifacts present —
   verified by actually cloning and installing, not assumed.
 
-- [ ] **`social` fetch running — `build/fetch_social.py`, 15 subreddits over
+- [x] **`social` fetch running — `build/fetch_social.py`, 15 subreddits over
   HTTP.** Started 2026-09-22. Acquisition is now a separate stage from
   ingestion, deliberately: the tokenizer has already changed twice (elision
   2026-09-17, doubled hyphens 2026-09-18) and each change would otherwise have
@@ -858,6 +860,8 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   than a reason to exclude it. Worth checking its keep rate separately once
   the data lands.
 
+  **DONE 2026-10-04.** Superseded: fetch complete, see "Finish the `social` acquisition crawl".
+
 - [x] **Bot/moderator accounts were leaking boilerplate into the corpus —
   fixed 2026-09-22.** Caught by running the real fetcher rather than the
   synthetic fixture: `brasov-ModTeam` posts removal notices constantly ("Hi
@@ -882,7 +886,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   case spec §7.2 warns about (111 authors, 638 of 1,425 rare words from one
   person).
 
-- [ ] **Finish the `social` acquisition crawl.** `build/fetch_social.py` has r/Romania
+- [x] **Finish the `social` acquisition crawl.** `build/fetch_social.py` has r/Romania
   comments complete (12,050,513 records back to 2010-03-30, 844.2 MiB `.zst`). Remaining:
   r/Romania posts, interrupted at 255,000 records back to 2022-02-06, plus all 14 other
   subreddits. Resume with `nohup build/run_social_fetch.sh > /dev/null 2>&1 &` — the
@@ -899,11 +903,15 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   rather than 3, and more words clear the ≥5 threshold. Check 1's function-word band and
   check 2's concordance still need re-reading after it.
 
-- [ ] **`COMPRESS_EVERY = 250_000` in `fetch_social.py` is dead code.** Defined, never
+  **DONE 2026-10-04.** All 15 subreddits fetched; ingested 2026-10-04 (13,717,928 documents, 536,523,553 tokens, 35.1m). Downstream stages rebuilt, `validate.py` 5/5, panel now six sources (`n_reliable=6` for common words). Check 1: `de` 7.68, `și` 7.34, `la` 7.23, `un` 6.94, `cu` 7.08. Check 2: concordance 0.948, ρ 0.851 (ungated).
+
+- [x] **`COMPRESS_EVERY = 250_000` in `fetch_social.py` is dead code.** Defined, never
   read; `compress()` is called once per subreddit at the end of `fetch()`. Either wire it
   up to compact incrementally (which would cap the transient peak above, and matters if a
   subreddit ever dwarfs r/Romania) or delete the constant so it stops implying a buffering
   behaviour that does not exist.
+
+  **DONE 2026-10-04.** Constant deleted from `fetch_social.py`; `compress()` still runs once per subreddit.
 
 - [x] **The tokenizer is not idempotent on one corner: an apostrophe at an internal
   hyphen boundary.** Found 2026-10-02 by `migrate_apostrophes.py`'s own
@@ -914,7 +922,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   token `t` satisfies `tokenize(t) == [t]`. Asserted by a property test over adversarial
   soup. No data migration was needed: all 6,050,118 `merged` keys reproduce exactly.
 
-- [ ] **`sources.period_note` for `social` must carry the independence and composition
+- [x] **`sources.period_note` for `social` must carry the independence and composition
   claim — write it from a full run of `build/measure_social_independence.py`, not from
   the sampled numbers below.** Spec rule: `documents` is an independence claim, and where
   a corpus has few authors you count them and say so. The cautionary case is LUMRO (175
@@ -958,6 +966,8 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   `străulești` both appear as separate reliable types in the same sample. The social source
   will carry the legacy-diacritic split too, so the +0.58 Zipf figure in that ADR is not
   confined to `web`.
+
+  **DONE 2026-10-04.** `ingest_social.py` writes the note from the full run: 264,357 distinct authors across 13,717,928 documents, top 100 authors = 9.5% of documents; says `documents` counts comments, not authors.
 
 - [ ] **LexicRo — evaluate what we can use, and what we can offer.**
   Full evaluation: **[`docs/lexicro-evaluation.md`](lexicro-evaluation.md)**.

@@ -1290,3 +1290,24 @@ edge-clean, and satisfies `tokenize(t) == [t]`; the new tests fail on the old to
 
 Proof no migration is needed: all 6,050,118 `merged` keys satisfy `tokenize(w) == [w]`
 (0 unreachable). Read-only access to the database. BACKLOG item closed.
+
+## 2026-10-04 — `social` lands: calibration fixes, full ingest, panel of six
+
+`--calibrate` on the full 1,463,707-record sample kept 72.8%. Reading its near-misses found
+two defects in `ingest_social.py`, both fixed (`366d169`): a Romanian marker carrying a
+diacritic (`mă`, `și`) was counted twice in `looks_romanian`, so one word could pass the
+two-signal rule alone; and the calibrate examples did not flatten newlines, so multi-line
+comments scrambled their `[ro= en=]` tags. Keep rate after the fix: 72.7%. Remaining
+near-misses are legitimate Romanian with English glue or Romanian place names in English text;
+thresholds left alone. The 6.6% dropped as "short + no signal either way" is the one real cost.
+
+Full ingest: 13,717,928 documents, 536,523,553 tokens, 35.1 min, restart loop never needed.
+English-leak check: `the`/`and`/`is` sit at Zipf 5.47/5.15/5.34 in `social`, in line with
+`eu`/`news`/`subs`/`web` (5.0–5.7 for `the`) — every source carries the same English, `social`
+adds none. Function words in `social`: `de` 7.61, `nu` 7.42, `la` 7.30, `și` 7.04.
+
+Rebuilt `compute_zipf --source social`, `merge`, `build_lemma_layer`, `build_package`: 6,064,995
+`merged` words, `n_reliable=6` at the top, all three stages byte-identical on re-run.
+`validate.py` 5/5: function words in band, concordance 0.948 (ρ 0.851, ungated), 59/59 monotone
+pairs, DEX coverage 97.7%. Spread top-100 is names, topics and diacritic-less spellings, as
+expected. Dead `COMPRESS_EVERY` removed from `fetch_social.py`.
