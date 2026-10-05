@@ -26,7 +26,8 @@ first to reorient, then follow the links.
 - **What stands between here and a release:** the DEX answer; a `LICENSE` file and the
   data-licence wording (Reddit and OpenSubtitles have no formal redistribution licence —
   only counts are shipped); `data/wrodfreq.db` is 4.09 GB against GitHub's 2 GiB per-asset
-  cap, so it needs compressing or splitting; choose PyPI trusted publishing or manual upload.
+  cap uncompressed (1.25 GiB with zstd; a 137 MiB light version is possible) — see
+  `docs/release-data-hosting.md`; choose PyPI trusted publishing or manual upload.
 
 ## How work is organised now
 

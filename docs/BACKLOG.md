@@ -1126,3 +1126,14 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   the junk share per stratum moved? do the open `?` classes (46 rows in 2026) now have a policy? is the
   joined-twin rule still ≥85% right? Record the outcome in this file and `docs/activity-history.md`.
 
+- [ ] **Decide where the data lives, and build the release export — see
+  `docs/release-data-hosting.md` (2026-10-05).** `wrodfreq.db` is 4.09 GB, over GitHub's
+  2 GiB per-asset cap uncompressed, but 1.25 GiB with `zstd -6`; a light database (reliable
+  per-source Zipf only, no raw counts) is 137 MiB compressed. The doc has the measurements, the
+  proposed `build/export_release.py`, and four decisions for the owner: Zenodo vs Hugging Face
+  for the full counts, whether to publish the light database, whether `documents` stays public,
+  and whether the lemma table ships before DEX answers. Keep `is_dex` out of any public database
+  until then. Related release blockers still open: a `LICENSE` file, the data-licence wording
+  (Reddit and OpenSubtitles have no formal redistribution licence; only counts ship), and the
+  PyPI route (trusted publishing or manual).
+

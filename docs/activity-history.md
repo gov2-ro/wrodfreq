@@ -1359,3 +1359,15 @@ Refreshed what had gone stale: `CLAUDE.md` ("spec only, no code yet" → built, 
 longer "to be created"; validation text now says concordance ≥0.93 and ~60 pairs; the >10× source-size
 note) and `docs/NEXT-SESSION.md` (rewritten for six sources, the shipped lemma layer, and the DEX
 request). README's heading and count edits committed with this change.
+
+## 2026-10-05 (night) — data hosting measured; light database prototyped
+
+Asked where to put `wrodfreq.db`. Measured instead of guessing: 4.09 GB raw, **1.25 GiB** with
+`zstd -6` (fits GitHub's 2 GiB per-asset cap), and ~2.1 GiB of it is derived or recreatable
+(`source_zipf` 1,097 MiB, `idx_sc_word` 1,001 MiB). 22.1M of 40.1M `source_counts` rows are words
+seen once; only 8.33M clear their floor. A prototype light database (sources, merged, reliable
+per-source Zipf, lemma table) is 549.6 MiB, **137.2 MiB** compressed — built in scratch, not a build
+stage. Compared with `wordfreq` (wheel 54.2 MiB for all languages; raw counts never published).
+Flagged that a public `is_dex` column or lemma table leaks DEX's headword list, so both wait on the
+DEX answer. Written up in `docs/release-data-hosting.md` with four decisions for the owner; backlog
+item added; NEXT-SESSION's release-blockers bullet now points to it.
