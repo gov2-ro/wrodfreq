@@ -1,0 +1,73 @@
+# Gate for a release. Runs when a version tag (v0.3.0, ...) is pushed, or by
+# hand from the Actions tab. It does NOT publish anything — publishing to PyPI
+# and the GitHub release stay manual (BACKLOG: M6).
+#
+# What it adds on top of ci.yml:
+#   - the tag must match the version in pyproject.toml and wrodfreq/__init__.py
+#   - the full test matrix, Python 3.10 through 3.13
+#   - a wheel built and installed into a clean venv
+#   - docs/method.md and docs/sources.md must exist and mention the version's
+#     panel (so a release cannot go out with stale documentation)
+#
+# What it cannot do: run build/validate.py against the real corpus. The 3.7 GB
+# database is not in git. Run `python build/validate.py` locally and paste the
+# "N/N checks passed" line into the release notes.
+
+name: Release check
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  version-matches-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: pyproject, __init__ and tag agree
+        run: |
+          py_ver=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          init_ver=$(grep -m1 '^__version__' wrodfreq/__init__.py | sed 's/.*"\(.*\)"/\1/')
+          echo "pyproject=$py_ver  __init__=$init_ver  ref=$GITHUB_REF_NAME"
+          [ "$py_ver" = "$init_ver" ]
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then [ "v$py_ver" = "$GITHUB_REF_NAME" ]; fi
+
+  docs-present:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: method.md and sources.md exist and are not empty
+        run: |
+          test -s docs/method.md
+          test -s docs/sources.md
+
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+      - run: pytest -q
+
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          python -m venv /tmp/wheeltest
+          /tmp/wheeltest/bin/pip install -q dist/*.whl
+          /tmp/wheeltest/bin/python -c "import wrodfreq; print(wrodfreq.__version__, wrodfreq.lemma_detail('casă'))"

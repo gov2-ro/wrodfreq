@@ -60,6 +60,28 @@ def _make_payloads() -> tuple[dict, dict]:
     return surface, by_src
 
 
+LEMMAS = {
+    # lemma -> (paradigm zipf, n_forms, headword zipf or None, family_ratio or None)
+    "birjă": (2.40, 4, 1.78, 3.5),
+    "tinereță": (1.74, 6, None, None),
+}
+
+
+def _lemma_payload() -> dict:
+    names = sorted(LEMMAS)
+    q = lambda v: -1 if v is None else round(v * SCALE)
+    return {
+        "format_version": 1,
+        "zipf_scale": SCALE,
+        "lemma_count": len(names),
+        "lemmas": names,
+        "zipf": [q(LEMMAS[n][0]) for n in names],
+        "n_forms": [LEMMAS[n][1] for n in names],
+        "zipf_headword": [q(LEMMAS[n][2]) for n in names],
+        "family_ratio": [q(LEMMAS[n][3]) for n in names],
+    }
+
+
 @pytest.fixture(autouse=True)
 def fake_data_files(tmp_path, monkeypatch):
     surface, by_src = _make_payloads()
@@ -68,6 +90,10 @@ def fake_data_files(tmp_path, monkeypatch):
     surface_path.write_bytes(lzma.compress(msgpack.packb(surface, use_bin_type=True)))
     by_source_path.write_bytes(lzma.compress(msgpack.packb(by_src, use_bin_type=True)))
 
+    lemma_path = tmp_path / "ro_lemma.msgpack.xz"
+    lemma_path.write_bytes(lzma.compress(msgpack.packb(_lemma_payload(), use_bin_type=True)))
+    monkeypatch.setattr(_surface, "LEMMA_PATH", lemma_path)
+    monkeypatch.setattr(_surface, "_lemmas", None)
     monkeypatch.setattr(_surface, "SURFACE_PATH", surface_path)
     monkeypatch.setattr(_surface, "BY_SOURCE_PATH", by_source_path)
     monkeypatch.setattr(_surface, "_surface", None)
@@ -154,10 +180,29 @@ def test_by_source_lazily_loads_the_second_file_only_when_called():
     assert data._by_source is not None
 
 
-def test_lemma_frequency_degrades_gracefully_without_a_lemma_data_file():
-    # No lemma data file shipped yet (DEX licence question unresolved) —
-    # must not crash, matches zipf_frequency's own "0.0 for unknown" shape.
-    assert wrodfreq.lemma_frequency("înmărmuri") == 0.0
+def test_lemma_frequency_reads_the_paradigm_rollup():
+    assert wrodfreq.lemma_frequency("birjă") == 2.40
+    assert wrodfreq.lemma_frequency("Birjă") == 2.40  # normalized like every other lookup
+
+
+def test_lemma_detail_fields_and_missing_values():
+    d = wrodfreq.lemma_detail("birjă")
+    assert (d.zipf, d.n_forms, d.zipf_headword, d.family_ratio) == (2.40, 4, 1.78, 3.5)
+    d = wrodfreq.lemma_detail("tinereță")
+    assert d.zipf_headword is None and d.family_ratio is None
+    assert wrodfreq.lemma_detail("de") is None
+
+
+def test_lemma_frequency_falls_back_to_the_surface_value_for_a_non_lemma():
+    assert wrodfreq.lemma_frequency("de") == wrodfreq.zipf_frequency("de") == 7.71
+    assert wrodfreq.lemma_frequency("cuvântcarenuexista") == 0.0
+
+
+def test_lemma_frequency_degrades_gracefully_without_a_lemma_data_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(_surface, "LEMMA_PATH", tmp_path / "absent.msgpack.xz")
+    monkeypatch.setattr(_surface, "_lemmas", None)
+    assert wrodfreq.lemma_detail("birjă") is None
+    assert wrodfreq.lemma_frequency("birjă") == wrodfreq.zipf_frequency("birjă") == 1.78
 
 
 def test_build_info_reports_the_panel():

@@ -35,17 +35,12 @@ Two encoding choices that mattered for size, both measured, not assumed:
     compressed) vs. quantized 97.7 MB packed (29.2 MB compressed) — under
     the 30 MB target only after this change.
 
-**`is_dex` and the lemma layer are deliberately NOT included in either
-file.** CLAUDE.md flags the DEX Online licence question as unresolved
-before *redistributing* anything derived from it — and `is_dex` is exactly
-that: an aggregate of ~587k booleans over `merged`'s own words would let
-anyone reconstruct a large fraction of DEX's own headword list by
-cross-referencing which shipped words have it set, which is a real
-redistribution question, not a hypothetical one. `lemma_frequency()` in the
-API degrades gracefully (returns 0.0, matching `zipf_frequency`'s own
-unknown-word contract) rather than shipping that data pending an actual
-answer to that question — this is a licensing decision, not an engineering
-one, and isn't made here.
+The lemma layer ships as a third file, `ro_lemma.msgpack.xz` — loaded lazily,
+only if `lemma_frequency()` / `lemma_detail()` is called, and optional: if the
+`lemma_zipf` table is empty or missing the file is simply not written and the
+API falls back to the surface value. (Shipping it assumes DEX Online's
+permission — see docs/BACKLOG.md, "DEX Online licence". `is_dex` is still NOT
+shipped: it is not needed by any API call.)
 
 Deterministic by construction (spec's idempotence ethos, §11.6): words are
 stored sorted ascending, arrays hold their exact resulting order, so a
@@ -76,6 +71,7 @@ from wrodfreq.db import DEFAULT_DB_PATH, connect, eligible_sources
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent / "wrodfreq" / "data"
 SURFACE_FILENAME = "ro_surface.msgpack.xz"
 BY_SOURCE_FILENAME = "ro_by_source.msgpack.xz"
+LEMMA_FILENAME = "ro_lemma.msgpack.xz"
 FORMAT_VERSION = 1
 ZIPF_SCALE = 100  # centizipf — matches spec's "round to 2 decimals"
 
@@ -161,6 +157,30 @@ def build_payloads(conn: sqlite3.Connection) -> tuple[dict, dict]:
     return surface_payload, by_source_payload
 
 
+def build_lemma_payload(conn: sqlite3.Connection) -> dict | None:
+    """The DEX-paradigm layer (spec §9), or None if it has not been built."""
+    try:
+        rows = conn.execute(
+            "SELECT lemma, zipf, n_forms, zipf_headword, family_ratio "
+            "FROM lemma_zipf ORDER BY lemma"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return None
+    if not rows:
+        return None
+    return {
+        "format_version": FORMAT_VERSION,
+        "zipf_scale": ZIPF_SCALE,
+        "lemma_count": len(rows),
+        "lemmas": [r[0] for r in rows],
+        "zipf": [_quantize(r[1]) for r in rows],
+        "n_forms": [r[2] for r in rows],
+        # -1 = the citation form alone was never seen reliably
+        "zipf_headword": [-1 if r[3] is None else _quantize(r[3]) for r in rows],
+        "family_ratio": [-1 if r[4] is None else _quantize(r[4]) for r in rows],
+    }
+
+
 def _write(payload: dict, out_path: Path) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     packed = msgpack.packb(payload, use_bin_type=True)
@@ -178,6 +198,7 @@ def main() -> int:
     conn = connect(args.db)
     print("Building payloads from `merged`...", flush=True)
     surface_payload, by_source_payload = build_payloads(conn)
+    lemma_payload = build_lemma_payload(conn)
     conn.close()
 
     print(f"  {len(surface_payload['words']):,} words, "
@@ -195,6 +216,15 @@ def main() -> int:
         over = target_mb is not None and mb > target_mb
         print(f"Wrote {path} — {size:,} bytes ({mb:.1f} MB)"
               f"{f'  ⚠ over the {target_mb} MB target' if over else ''}", flush=True)
+    lemma_path = args.out_dir / LEMMA_FILENAME
+    if lemma_payload is None:
+        lemma_path.unlink(missing_ok=True)
+        print("No lemma layer in the db — ro_lemma.msgpack.xz not written "
+              "(lemma_frequency() will fall back to the surface value).", flush=True)
+    else:
+        size = _write(lemma_payload, lemma_path)
+        print(f"Wrote {lemma_path} — {size:,} bytes ({size / (1 << 20):.1f} MB), "
+              f"{lemma_payload['lemma_count']:,} lemmas", flush=True)
     return 0
 
 

@@ -18,21 +18,21 @@ ADR-001). `zipf_frequency('spune-')` is a number; `frequency_detail('spune-')`
 is None. Divergences from wordfreq: numerals and words with non-Romanian
 letters return `minimum` (see `zipf_frequency`).
 
-`lemma_frequency` currently always returns 0.0: the DEX-derived paradigm
-rollup isn't shipped in the data file pending an unresolved licensing
-question (see build/build_package.py's docstring) — degrading gracefully
-here, not crashing, is the one part of that decision that *is* made in code.
+`lemma_frequency(word)` rolls the word's whole DEX paradigm up into one Zipf
+value. Pass the dictionary form (`înmărmuri`, not `înmărmurit`). A word that is
+not a DEX lemma, or a build without the lemma file, answers with the plain
+`zipf_frequency` value instead — never a crash.
 """
 
 from __future__ import annotations
 
 from wrodfreq import _surface
-from wrodfreq._surface import FrequencyDetail
+from wrodfreq._surface import FrequencyDetail, LemmaDetail
 import math
 
 from wrodfreq.tokenizer import _TOKEN_RE, normalize, tokenize
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "zipf_frequency",
@@ -42,7 +42,9 @@ __all__ = [
     "lemma_frequency",
     "by_source",
     "build_info",
+    "lemma_detail",
     "FrequencyDetail",
+    "LemmaDetail",
 ]
 
 
@@ -151,16 +153,23 @@ def frequency_detail(word: str) -> FrequencyDetail | None:
     return data.detail(i) if i is not None else None
 
 
-def lemma_frequency(word: str, lang: str = "ro") -> float:
-    """Zipf-scale frequency of `word`'s whole inflectional paradigm.
-
-    Always 0.0 right now — see this module's docstring. Once the DEX
-    licensing question is resolved and a lemma data file ships, this
-    degrades to `zipf_frequency`'s own behavior for a word outside the
-    paradigm map, not a crash — that's the contract this stub already
-    honors.
+def lemma_detail(word: str) -> LemmaDetail | None:
+    """Lemma-layer row for the dictionary form `word`: paradigm Zipf, number of
+    forms, the citation form's own Zipf, and `family_ratio`. None if `word` is
+    not a lemma in the table (or this build ships no lemma layer).
     """
-    return 0.0
+    lemmas = _surface.load_lemmas()
+    return lemmas.detail(normalize(word)) if lemmas is not None else None
+
+
+def lemma_frequency(word: str, lang: str = "ro") -> float:
+    """Zipf-scale frequency of the whole inflectional paradigm of `word`.
+
+    Falls back to `zipf_frequency(word)` when `word` is not a lemma in the
+    table, or when the build ships no lemma layer.
+    """
+    detail = lemma_detail(word)
+    return detail.zipf if detail is not None else zipf_frequency(word)
 
 
 def by_source(word: str) -> dict[str, float | None] | None:

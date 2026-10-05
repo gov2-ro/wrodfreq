@@ -19,6 +19,7 @@ import msgpack
 DATA_DIR = Path(__file__).parent / "data"
 SURFACE_PATH = DATA_DIR / "ro_surface.msgpack.xz"
 BY_SOURCE_PATH = DATA_DIR / "ro_by_source.msgpack.xz"
+LEMMA_PATH = DATA_DIR / "ro_lemma.msgpack.xz"
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,50 @@ class FrequencyDetail:
     n_attesting: int
     n_sources: int
     spread: float
+
+
+@dataclass(frozen=True)
+class LemmaDetail:
+    zipf: float
+    n_forms: int
+    zipf_headword: float | None   # the citation form alone; None if never reliably seen
+    family_ratio: float | None
+
+
+class _Lemmas:
+    def __init__(self, payload: dict):
+        self._scale: int = payload["zipf_scale"]
+        self._index = {w: i for i, w in enumerate(payload["lemmas"])}
+        self._zipf = payload["zipf"]
+        self._n_forms = payload["n_forms"]
+        self._headword = payload["zipf_headword"]
+        self._ratio = payload["family_ratio"]
+
+    def detail(self, lemma: str) -> LemmaDetail | None:
+        i = self._index.get(lemma)
+        if i is None:
+            return None
+        sc = self._scale
+        hw, fr = self._headword[i], self._ratio[i]
+        return LemmaDetail(
+            zipf=self._zipf[i] / sc,
+            n_forms=self._n_forms[i],
+            zipf_headword=None if hw < 0 else hw / sc,
+            family_ratio=None if fr < 0 else fr / sc,
+        )
+
+
+_lemmas: _Lemmas | None = None
+
+
+def load_lemmas() -> _Lemmas | None:
+    """The lemma layer, or None if this build does not ship one."""
+    global _lemmas
+    if _lemmas is None:
+        if not LEMMA_PATH.exists():
+            return None
+        _lemmas = _Lemmas(_load_payload(LEMMA_PATH))
+    return _lemmas
 
 
 def _load_payload(path: Path) -> dict:

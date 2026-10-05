@@ -1311,3 +1311,27 @@ Rebuilt `compute_zipf --source social`, `merge`, `build_lemma_layer`, `build_pac
 `validate.py` 5/5: function words in band, concordance 0.948 (ρ 0.851, ungated), 59/59 monotone
 pairs, DEX coverage 97.7%. Spread top-100 is names, topics and diacritic-less spellings, as
 expected. Dead `COMPRESS_EVERY` removed from `fetch_social.py`.
+
+## 2026-10-05 — 0.2.0: lemma layer ships, Romanian method and sources docs, release gate
+
+Version bumped to **0.2.0** (the panel went from five to six sources, so MINOR changes).
+`build_package.py` now writes a third data file, `ro_lemma.msgpack.xz` (180,569 lemmas,
+1.1 MB), read lazily by `lemma_frequency()` and the new `lemma_detail()` (paradigm Zipf,
+`n_forms`, headword Zipf, `family_ratio`). `lemma_frequency` falls back to the surface
+`zipf_frequency` for a non-lemma or a build without the file. This replaces the old
+always-`0.0` stub; the shipping assumes DEX Online's permission, which is still unconfirmed
+(BACKLOG: "DEX Online licence"). `is_dex` is still not shipped.
+
+M5 check on real data: `lemma_frequency('înmărmuri')` 1.66 vs `zipf_frequency` 0.81. The spec's
+`family_ratio` for `tinereță` of "~300" is now **128**; the 300 was oțios's figure on its own
+corpus and weights, so it is not a regression. Clean-venv install of the wheel (40 MB) imports
+and answers: `cuvânt` 4.74, `build_info()` lists all six sources.
+
+New docs, in Romanian: `docs/method.md` (how a number is made, the six checks, known limits,
+how to cite) and `docs/sources.md` (the six corpora). `docs/dex-online-cerere.md` is a draft
+request to DEX Online, not sent. README updated to the six-source numbers (6,064,995 words, 229
+tests). While writing sources.md, found the spec's "CulturaX is ~200× the next source" is out of
+date: `web` is ~11× `news` now (23.8B vs 2.2B tokens).
+
+CI: `ci.yml`'s wheel step now checks `lemma_detail` degrades (the old step called
+`lemma_frequency`, which now needs the surface file). New `release-check.yml` on `v*` tags.

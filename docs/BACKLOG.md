@@ -990,3 +990,22 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   licensing only for MULTEXT-East and UD RRT, so its author has already met this project's
   deferred DEX blocker from the same direction. How they resolved it may unblock
   `lemma_frequency()` outright.
+
+- [ ] **DEX Online licence — send the request, then write the answer into the methodology.**
+  The lemma layer (`ro_lemma.msgpack.xz`, 180,569 lemmas, numbers only) now ships in the
+  package and the project treats permission as granted, but no answer exists yet. Draft
+  Romanian request: `docs/dex-online-cerere.md` (not sent). It asks three things:
+  (1) the derived per-lemma numbers, (2) redistributing the form→lemma map
+  (`inflected_forms.db`) as a release asset, (3) attribution wording. **Before publishing
+  the GitHub release:** either get the answer, or ship only `extract_inflected_forms.py`
+  and drop `inflected_forms.db` from the release assets. **When the answer arrives, add the
+  licence terms and attribution to `docs/method.md` (section 5, the "Licență" note) and to
+  `docs/sources.md`** — both currently say the terms are still being clarified.
+
+- [ ] **GitHub Actions at each major release.** `.github/workflows/release-check.yml`
+  (added 2026-10-05) runs on a `v*` tag: tag = pyproject = `__init__` version, tests on
+  Python 3.10–3.13, wheel built and installed into a clean venv, `docs/method.md` and
+  `docs/sources.md` present. It does not publish, and it cannot run `build/validate.py`
+  (the 3.7 GB database is not in git): run it locally before tagging and paste the
+  "N/N checks passed" line into the release notes. Decide whether to add a publish job
+  (PyPI trusted publishing) once the DEX answer is in.

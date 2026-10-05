@@ -92,15 +92,14 @@ jobs:
       - name: Build sdist + wheel
         run: python -m build
       - name: Install the wheel into a clean venv and import it
-        # The data file is gitignored, so a wheel built here ships without one.
-        # The API must degrade rather than explode: spec §10.1 requires
-        # zipf_frequency to answer 0.0 for anything it does not know, and the
-        # lemma layer to degrade gracefully when its map is absent.
+        # The data files are gitignored, so a wheel built here ships without them.
+        # The lemma layer must degrade rather than explode when its file is
+        # absent (lemma_detail -> None); the surface table is required.
         run: |
           python -m venv /tmp/wheeltest
           /tmp/wheeltest/bin/pip install -q dist/*.whl
           /tmp/wheeltest/bin/python -c "
           import wrodfreq
           print('version', wrodfreq.__version__)
-          print('lemma_frequency degrades:', wrodfreq.lemma_frequency('casă'))
+          print('lemma_detail degrades:', wrodfreq.lemma_detail('casă'))
           "

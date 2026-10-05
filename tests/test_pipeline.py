@@ -217,3 +217,16 @@ def test_merge_never_weights_by_source_size(db):
         "SELECT zipf FROM source_zipf WHERE word='casă' AND source_id='web'").fetchone()[0]
     assert merged != pytest.approx(web_only, abs=0.01), (
         "merged tracking the largest source exactly suggests size-weighting")
+
+
+def test_lemma_payload_is_absent_without_a_lemma_layer(db):
+    _build_all(db)
+    assert build_package.build_lemma_payload(db) is None
+
+
+def test_lemma_payload_packs_missing_values_as_minus_one(db):
+    _build_all(db)
+    db.execute("INSERT INTO lemma_zipf VALUES ('a', 2.0, 3, 1.5, 4.0), ('b', 1.0, 1, NULL, NULL)")
+    p = build_package.build_lemma_payload(db)
+    assert p["lemmas"] == ["a", "b"] and p["zipf"] == [200, 100]
+    assert p["zipf_headword"] == [150, -1] and p["family_ratio"] == [400, -1]

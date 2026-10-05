@@ -1,23 +1,23 @@
 # wROdfreq
 
-A Romanian word-frequency table on the Zipf scale, built from 5 open corpora (28.2B
-tokens total; a 6th is being acquired), designed to ship as `pip install wrodfreq` with an API that is drop-in
+A Romanian word-frequency table on the Zipf scale, built from 6 open corpora (28.8B
+tokens total), designed to ship as `pip install wrodfreq` with an API that is drop-in
 compatible with [`wordfreq`](https://github.com/rspeer/wordfreq) — plus the raw SQLite
 for researchers.
 
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
-> are done — 5-source panel ingested, merged, packaged, and validated
-> (`build/validate.py`: **6/6 checks pass**, including byte-identical rebuilds).
-> 6,050,118 words; 224 tests. Verified against a real, isolated
+> are done — 6-source panel ingested, merged, packaged, and validated
+> (`build/validate.py`: **5/5 checks pass**, including byte-identical rebuilds).
+> 6,064,995 words; 180,569 lemmas; 229 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
 
 ```python
 from wrodfreq import zipf_frequency, word_frequency, top_n_list
 
-zipf_frequency('cuvânt')            # 4.86 — 'ro' accepted and ignored, for compatibility
-word_frequency('cuvânt')            # 7.24e-05
-top_n_list(5)                       # ['de', 'în', 'a', 'și', 'la']
+zipf_frequency('cuvânt')            # 4.74 — 'ro' accepted and ignored, for compatibility
+word_frequency('cuvânt')            # 5.50e-05
+top_n_list(5)                       # ['de', 'a', 'în', 'și', 'la']
 ```
 
 Plus extensions no other Romanian frequency resource publishes — per-source
@@ -27,26 +27,27 @@ corroboration, not just an average:
 from wrodfreq import frequency_detail, by_source
 
 frequency_detail('birjă')
-# FrequencyDetail(zipf=1.78, n_reliable=4, n_attesting=4, n_sources=5, spread=0.89)
+# FrequencyDetail(zipf=1.77, n_reliable=4, n_attesting=5, n_sources=6, spread=0.87)
 by_source('birjă')
-# {'eu': None, 'news': 1.22, 'subs': 2.1, 'web': 1.77, 'wiki': 2.04}
+# {'eu': None, 'news': 1.21, 'social': None, 'subs': 2.09, 'web': 1.77, 'wiki': 2.04}
 ```
 
 `by_source`'s `None` for `eu` means that source never saw the word reliably — not that
 the word is rare there. A source that abstains is a different claim from a source that
 reports zero, and this table keeps the two apart (see `docs/wrodfreq-spec.md` §8.1).
 
-`lemma_frequency()` also exists but currently always returns `0.0` — the DEX-derived
-paradigm rollup is built and validated (180,539 lemmas) but not shipped in the package
-yet, pending confirmation of DEX Online's redistribution terms. See
-[`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md).
+`lemma_frequency()` rolls a word up through its whole DEX paradigm
+(`lemma_frequency('înmărmuri')` is 1.66; the bare form `zipf_frequency('înmărmuri')` is
+0.81), and `lemma_detail()` adds the number of forms and `family_ratio`. The lemma layer
+(180,569 lemmas) ships in the package; DEX Online's redistribution terms are still being
+confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (Romanian).
 
 ### Building it yourself
 
 ```bash
 git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
 uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
-python -m pytest tests/ -q       # 224 tests — pass with no data files at all
+python -m pytest tests/ -q       # 229 tests — pass with no data files at all
 # Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
 # most people will want data/wrodfreq.db as a release asset once one exists, and
 # just run:
@@ -57,7 +58,7 @@ python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
 
 ## What it's for
 
-The distinctive assets are the ones worth building on: **6,050,118 words** rather than
+The distinctive assets are the ones worth building on: **6,064,995 words** rather than
 `wordfreq`'s "small" list, a floor far below Zipf 3.0, per-source retention
 (`n_reliable` / `n_attesting` / `spread` / `by_source`), six registers with period tags,
 and a lemma layer kept separate from surface forms.
@@ -104,10 +105,9 @@ legacy-variant encoding affects exactly this use case and is a known-wrong area.
 ### What it is not
 
 Not a lemmatizer, tagger, or corpus distribution. It answers *how common is this word*,
-and keeping the API small is why it answers it well. The lemma layer is also **not yet
-shipped** — 180,539 validated lemma frequencies exist locally, but `lemma_frequency()`
-returns `0.0` in the package pending the DEX Online conversation, so lemma-level uses are
-real but gated.
+and keeping the API small is why it answers it well. The lemma layer is in the
+package (180,569 lemmas), but its redistribution terms are still being confirmed with DEX
+Online.
 
 In one sentence: **it tells you not just how common a Romanian word is, but how much the
 corpora agree — and for a rare word, agreement is the more useful number.**
@@ -117,7 +117,8 @@ corpora agree — and for a rare word, agreement is the more useful number.**
 ## Română
 
 wROdfreq este un tabel de frecvență a cuvintelor pentru limba română, calculat pe scara
-Zipf din cinci corpusuri deschise (web, presă, subtitrări, Wikipedia, texte UE — 27,8
+Zipf din șase corpusuri deschise (web, presă, subtitrări, conversații online, Wikipedia,
+texte UE — 28,8
 miliarde de cuvinte în total). Se instalează din sursă deocamdată (nu este încă publicat
 pe PyPI — vezi mai sus) și oferă o interfață compatibilă 1:1 cu biblioteca `wordfreq` —
 se schimbă o singură linie de import.
@@ -125,10 +126,10 @@ se schimbă o singură linie de import.
 Este mai bun decât suportul `wordfreq` pentru română, care folosește doar trei surse,
 doar lista "small" și un prag minim de Zipf 3.0. wROdfreq adaugă și un lucru pe care
 nicio altă resursă de frecvență nu îl publică: gradul de confirmare per sursă
-(`n_reliable`, `n_attesting`, `spread`) — câte din cele cinci surse confirmă fiecare
+(`n_reliable`, `n_attesting`, `spread`) — câte din cele șase surse confirmă fiecare
 cuvânt, nu doar o medie. Un strat de frecvențe per lemă, derivat din paradigmele
-flexionare din DEX, este deja calculat (180.820 leme) dar nu este încă inclus în pachet,
-în așteptarea confirmării termenilor de redistribuire ai DEX Online.
+flexionare din DEX (180.569 leme), este inclus în pachet; termenii de redistribuire ai
+DEX Online sunt încă în curs de confirmare. Metodologia completă: [`docs/method.md`](docs/method.md).
 
 Nu este un lematizator, un etichetator gramatical (POS tagger) sau o distribuție de
 corpus — vezi [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §2.
@@ -149,10 +150,10 @@ wROdfreq is better than the Romanian data in `wordfreq`. The `wordfreq` tool use
 three text collections. It shows only the "small" word list. It does not show words with
 a Zipf value below 3.0.
 
-wROdfreq adds one new type of data: it shows how many of the five sources confirm each
-word, not only an average. A frequency value for each word lemma is also computed (from
-DEX dictionary word-form data), but it is not in the package yet. The dictionary's terms
-for this use are not yet confirmed.
+wROdfreq adds one new type of data: it shows how many of the six sources confirm each
+word, not only an average. A frequency value for each word lemma is also in the package
+(from DEX dictionary word-form data). The dictionary's terms for this use are still being
+confirmed.
 
 wROdfreq is not a lemmatizer. wROdfreq is not a part-of-speech tagger. wROdfreq is not a
 text-collection product.
@@ -162,7 +163,7 @@ text-collection product.
 ## Schematic overview
 
 ```
-5 open corpora (web, news, subs, wiki, eu — 27.8B tokens)
+6 open corpora (web, news, subs, social, wiki, eu — 28.8B tokens)
         │
         ▼
  ingest_<source>.py    per-source token counts — checkpointed, resumable
@@ -206,10 +207,10 @@ Full detail in [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §13 and
       sources, the trimmed-mean branch in `merge.py` is reachable.
 - [x] **M4 — Merge.** `merge.py`: 6,193,962 words in `merged`, atomic table-swap rebuild,
       verified idempotent.
-- [x] **M5 — Lemma layer.** `build_lemma_layer.py`: 180,820 lemmas, ported oțios's
+- [x] **M5 — Lemma layer.** `build_lemma_layer.py`: 180,569 lemmas, ported oțios's
       disambiguation math but merges across sources via the same trimmed mean as surface
-      forms (not oțios's raw-sum, which would let CulturaX dominate). Built and validated
-      — **not shipped in the package** pending the DEX Online licensing question.
+      forms (not oțios's raw-sum, which would let CulturaX dominate). Built, validated and
+      shipped in the package as `ro_lemma.msgpack.xz` (DEX Online terms still being confirmed).
 - [x] **M6 — Package.** `build_package.py` + the real API (`wrodfreq/__init__.py`).
       Verified against a real, isolated `pip install` of the built wheel. Not yet
       published to PyPI or cut as a GitHub release.
@@ -218,10 +219,8 @@ Full detail in [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §13 and
       standalone CSV, not yet wired into oțios's own scoring (an editorial decision for
       that project, not this one).
 
-All seven milestones are done. What's left is `build/validate.py`'s one remaining
-failing check (a tokenizer/elision issue that needs a full 5-source re-ingest to fix)
-and the DEX licensing question — both tracked in
-[`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md).
+All seven milestones are done and `build/validate.py` passes 5/5. What's left is
+publishing and the DEX licensing question — see [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## Docs
 
@@ -229,6 +228,8 @@ and the DEX licensing question — both tracked in
   lemma layer, API contract, validation, repo layout, build order, traps.
 - [`docs/wordfreq-recipe.md`](docs/wordfreq-recipe.md) — why the parent project (oțios)
   rejected this method for *its* question, and the measurements behind that.
+- [`docs/method.md`](docs/method.md) — how the numbers are made, in plain Romanian.
+- [`docs/sources.md`](docs/sources.md) — the six corpora: size, period, licence, caveats (Romanian).
 - [`docs/BACKLOG.md`](docs/BACKLOG.md) — open bugs, debt, enhancements.
 - [`docs/activity-history.md`](docs/activity-history.md) — chronological work log.
 - [`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md) — where things stand and what's still
