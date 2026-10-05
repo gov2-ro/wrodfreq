@@ -1057,3 +1057,26 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   still holds for every `merged` key. Trigger: any change that forces a full re-ingest.
 
 - [ ] add Mermaid charts to Methodology or README?
+
+- [ ] **API: hyphen-splitting fallback in `zipf_frequency` / `word_frequency` — to be
+  discussed again later, eventually (owner, 2026-10-05).** If a tokenized token contains
+  `-` and is not in the table, split it on the hyphens and combine the parts harmonically,
+  as `wordfreq` does (`state-of-the-art` → `state`+`of`+`the`+`art`). Restores a value for
+  the ~40 corroborated 3+-hyphen compounds dropped from the package on 2026-10-05
+  (`state-of-the-art` 1.66 → now 0.0, `ha-ha-ha-ha`, `saint-germain-en-laye`) and for any
+  compound the table never saw. Costs: about ten lines plus tests; it amends ADR-001's
+  "one token → its row, exact" rule, so it needs a short ADR-003 and a look at
+  `validate.py` check 2 (wordfreq comparison) to make sure it only moves words we lack.
+  Extensions (`frequency_detail`, `by_source`) would stay exact-lookup. Not started.
+
+- [ ] **Label the one-hyphen rows (human review in progress).** 819,273 one-hyphen rows,
+  13.5% of `merged`, 6,130 in DEX. `python build/export_hyphen_sample.py` writes
+  `data/review/hyphen_sample.csv` (gitignored): 360 shuffled rows from five strata (`dex`,
+  `corroborated` n_reliable≥3, `two_sources`, `one_src_common` zipf≥1, `one_src_rare`
+  zipf<1 — 701,782 rows, sampled double). Owner fills the `label` column with K (keep) /
+  J (junk) / ? and an optional `note`; then `python build/summarize_hyphen_labels.py`
+  prints junk share per stratum. A stratum is a candidate for dropping at packaging only if
+  nearly all of it is J (and no K that matters); otherwise the rule must be finer and needs
+  another measurement. Outcome decides whether `MAX_HYPHENS` goes down or a per-stratum
+  rule is added to `build_package.py`.
+
