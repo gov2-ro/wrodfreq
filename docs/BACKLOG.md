@@ -458,9 +458,11 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   `source_counts`). Cheaper *and* safer than a full copy on a tight disk;
   worth reaching for first next time a migration touches a bounded row set.
 
-- [ ] **Non-Romanian diacritics split foreign words mid-token.** Mechanism
-  confirmed; **measured 2026-10-02 (brief B2) — recommendation: do not widen the
-  class; decision still open.** `_TOKEN_RE`'s class is `[a-zăâîșț]`, so any other
+- [x] **Non-Romanian diacritics split foreign words mid-token.** Mechanism
+  confirmed; **measured 2026-10-02 (brief B2). DECIDED 2026-10-05: do not widen the
+  class; accept the limitation in 0.2.0 (documented in `docs/method.md` §7); the
+  legacy-diacritic normalisation is tracked separately below and rides the next
+  re-ingest.** `_TOKEN_RE`'s class is `[a-zăâîșț]`, so any other
   letter terminates the match and restarts it:
 
       Düsseldorf -> ['d', 'sseldorf']      Köln   -> ['k', 'ln']
@@ -1009,3 +1011,14 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   (the 3.7 GB database is not in git): run it locally before tagging and paste the
   "N/N checks passed" line into the release notes. Decide whether to add a publish job
   (PyPI trusted publishing) once the DEX answer is in.
+
+- [ ] **Normalise legacy/wrong-keyboard Romanian letters in `normalize()` — fold into the
+  next re-ingest, do not re-ingest for this alone.** Decided 2026-10-05 (owner), from
+  ADR-002 / brief B2. Map `ã ǎ → ă`, `ȋ → î`, `ȃ → â`, and decide separately on `þ → ț`
+  (72% of its forms become a real word) and on Portuguese `ã` in Wikipedia names (`são`;
+  only 17% map to a Romanian word, so a blanket `ã → ă` is not free — consider applying it
+  per source, or only when the result is in a known-word set). Measured payoff on `web`:
+  3,214 Romanian words gain ≥0.005 Zipf, up to +0.58 (`învătământ`); `ã` fragments are
+  0.047% of web tokens. Needs the measure-first treatment once more before landing: re-read
+  raw text with the new `normalize()` beside the old one, and check that `tokenize(t) == [t]`
+  still holds for every `merged` key. Trigger: any change that forces a full re-ingest.
