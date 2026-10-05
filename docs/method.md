@@ -107,7 +107,7 @@ Două decizii care merită explicate:
   următoarea sursă. Dacă l-am cântări după mărime, tabelul ar deveni „CulturaX, cu pași
   în plus", iar tăierea nu ar mai avea rost.
 
-Tabelul conține **6.064.995 de cuvinte**. Câte surse le văd sigur:
+Baza de date conține **6.064.995 de cuvinte**; din pachet lipsesc 23.453 de șiruri cu trei sau mai multe cratime (vezi secțiunea 7), deci pachetul conține **6.041.542**. Câte surse văd sigur cuvintele din baza de date:
 
 | Surse sigure | Cuvinte |
 |---:|---:|
@@ -215,9 +215,11 @@ Tabelul nu e perfect. Iată ce știm și nu am rezolvat.
   de fapt română scrisă cu tastatură străină (`dupã`, `cã`). Ele apar ca fragmente.
 - **Forme fără diacritice.** Mulți scriu `sa` în loc de `să`. Tabelul le păstrează ca
   forme separate, cu frecvența lor reală; nu le unificăm.
-- **Adrese web rupte în cuvinte.** Aproximativ 23 de mii de intrări sunt șiruri lungi cu
-  cratime, luate din adrese web. Aproape toate sunt la Zipf în jur de 0 sau sub, deci nu afectează
-  cuvintele obișnuite.
+- **Adrese web rupte în cuvinte.** Aproximativ 23 de mii de intrări sunt șiruri cu trei sau
+  mai multe cratime (adrese web, titluri în engleză, denumiri chimice, liste de localități).
+  Sunt în baza de date, dar **nu sunt în pachet**: `zipf_frequency('state-of-the-art')`
+  dă 0,0. Cuvintele cu una sau două cratime (`cluj-napoca`, `play-off-ul`) rămân, dar
+  și printre ele sunt multe șiruri fără valoare, nemăsurate încă.
 - **Engleză în text.** Toate sursele conțin cuvinte englezești (`the` are 5,0–6,4 în
   fiecare). Nu le scoatem: tabelul măsoară ce apare, nu ce e românesc.
 - **Surse traduse.** `subs` și `eu` sunt în mare parte traduceri.

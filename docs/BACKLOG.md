@@ -652,7 +652,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   *wordfreq's* `zipf_frequency` on wordfreq's own list, all single tokens).
   The `test_b3_*` cases in `tests/test_api.py` are now live (un-skipped by B5).
 
-- [ ] **The web corpus tokenizes URL slugs and punycode into `merged`.**
+- [x] **The web corpus tokenizes URL slugs and punycode into `merged`.** (3+ hyphens: filtered at packaging, 2026-10-05; the 1–2-hyphen junk is still unmeasured.)
   Measured 2026-09-21 while verifying the dash migration, which is how it
   surfaced — **pre-existing, not caused by that migration**, which only
   *renamed* some of these (`live---postaci-…` → `postaci-…`, correctly, as
@@ -711,8 +711,16 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   - **Recommendation: drop rows with ≥3 hyphens when building the package (`build_package.py`),
     keep them in `wrodfreq.db`.** Costs 23,453 shipped rows (0.39%) and no function word,
     DEX lemma (9 rows) or row above Zipf 3.2; needs no re-ingest; reversible. Lost: ~40
-    interjection/foreign compounds, which `zipf_frequency` still answers by tokenizing and
-    combining the parts. **Not done — awaiting the owner's decision.**
+    interjection/foreign compounds. **CORRECTION (same day):** the first draft of this
+    said `zipf_frequency` would still answer them by combining the parts. It does not —
+    the tokenizer keeps hyphenated words whole (`tokenize('state-of-the-art')` is one
+    token), so a dropped row answers `0.0` / `None` (it was 1.66). `wordfreq` splits such
+    words and combines them harmonically. **DECIDED and DONE 2026-10-05 (owner agreed):**
+    `build_package.py` `MAX_HYPHENS = 2`; the shipped file has 6,041,542 words; the 23,453
+    rows stay in `wrodfreq.db`. Open follow-up: an API fallback that splits an unknown
+    hyphenated token on `-` and combines the parts as `wordfreq` does would restore a value
+    for the ~40 and for any compound we never saw; it touches ADR-001's exact-token rule,
+    so it needs its own decision.
   - Larger, separate finding: the 819,273 one-hyphen rows are 13.5% of the table and only
     6,130 are in DEX (268 at Zipf ≥3: real compounds like `cluj-napoca`, `e-mail`, mixed with
     junk). A one-hyphen rule would need its own measurement; a hyphen cap does not touch it.

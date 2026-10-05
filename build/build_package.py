@@ -74,6 +74,11 @@ BY_SOURCE_FILENAME = "ro_by_source.msgpack.xz"
 LEMMA_FILENAME = "ro_lemma.msgpack.xz"
 FORMAT_VERSION = 1
 ZIPF_SCALE = 100  # centizipf — matches spec's "round to 2 decimals"
+# Rows with more hyphens than this are left out of the shipped file (they stay in
+# the database). Measured 2026-10-05 (docs/BACKLOG.md, "URL slugs"): the 23,453
+# `merged` rows with 3+ hyphens are URL slugs, page titles, chemical names and
+# stuttered interjections — 9 are in DEX, none is above Zipf 3.2.
+MAX_HYPHENS = 2
 
 
 def _quantize(zipf: float) -> int:
@@ -86,7 +91,9 @@ def build_payloads(conn: sqlite3.Connection) -> tuple[dict, dict]:
 
     rows = conn.execute(
         "SELECT word, zipf, n_reliable, n_attesting, n_sources, spread "
-        "FROM merged ORDER BY word"
+        "FROM merged WHERE length(word) - length(replace(word, '-', '')) <= ? "
+        "ORDER BY word",
+        (MAX_HYPHENS,),
     ).fetchall()
 
     n_sources_values = {r[4] for r in rows}

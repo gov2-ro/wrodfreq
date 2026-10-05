@@ -230,3 +230,15 @@ def test_lemma_payload_packs_missing_values_as_minus_one(db):
     p = build_package.build_lemma_payload(db)
     assert p["lemmas"] == ["a", "b"] and p["zipf"] == [200, 100]
     assert p["zipf_headword"] == [150, -1] and p["family_ratio"] == [400, -1]
+
+
+def test_package_leaves_out_rows_with_three_or_more_hyphens(db):
+    """URL slugs live in `merged` but are not shipped (BACKLOG, 2026-10-05)."""
+    _build_all(db)
+    db.execute("INSERT INTO merged (word, zipf, n_reliable, n_attesting, n_sources, spread) "
+               "VALUES ('cluj-napoca', 3.0, 1, 1, 5, 0), ('a-b-c', 2.0, 1, 1, 5, 0), "
+               "('a-b-c-d', 2.0, 1, 1, 5, 0)")
+    words = build_package.build_payloads(db)[0]["words"]
+    assert "cluj-napoca" in words and "a-b-c" in words     # 1 and 2 hyphens stay
+    assert "a-b-c-d" not in words                          # 3 hyphens go
+    assert db.execute("SELECT 1 FROM merged WHERE word='a-b-c-d'").fetchone() is not None

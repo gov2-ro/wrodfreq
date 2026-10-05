@@ -1335,3 +1335,14 @@ date: `web` is ~11× `news` now (23.8B vs 2.2B tokens).
 
 CI: `ci.yml`'s wheel step now checks `lemma_detail` degrades (the old step called
 `lemma_frequency`, which now needs the surface file). New `release-check.yml` on `v*` tags.
+
+## 2026-10-05 (later) — rows with 3+ hyphens are no longer shipped
+
+Measured the URL-slug question read-only on `merged`: `documents` does not separate slugs from
+real compounds (a slug repeats across one site's pages), but hyphen count does — 23,453 rows
+have 3+ hyphens, 9 are in DEX, none is above Zipf 3.2, 97.7% are single-source. Owner agreed to
+drop them from the package. `build_package.py` gets `MAX_HYPHENS = 2`; the shipped surface file
+is 6,041,542 words (was 6,064,995), by_source and lemma files unchanged in shape; the rows stay in
+`wrodfreq.db`. Test added (230 pass). Corrected a mistake in the earlier recommendation: the
+tokenizer keeps hyphenated words whole, so dropped rows answer 0.0, not a combined value. The
+one-hyphen rows (819,273, 13.5% of the table, 6,130 in DEX) are still unmeasured.

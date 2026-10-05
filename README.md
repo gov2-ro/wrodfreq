@@ -23,10 +23,10 @@ corpus — vezi [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §2.
 
 ---
 
-## English — Simplified Technical English (ASD-STE100 style)
+## 🇬🇧 English — Simplified Technical English (ASD-STE100 style)
 
-wROdfreq gives word-frequency data for the Romanian language. The data comes from five
-open text collections (27.8 billion words in total). wROdfreq uses the Zipf scale to
+wROdfreq gives word-frequency data for the Romanian language. The data comes from six
+open text collections (28.8 billion words in total). wROdfreq uses the Zipf scale to
 show how common each word is.
 
 wROdfreq is not yet on PyPI. You must install it from source for now — see the build
