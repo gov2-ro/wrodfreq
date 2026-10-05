@@ -201,7 +201,7 @@ Coeficientul Spearman față de `wordfreq` este afișat (acum 0,851) dar **nu es
 condiție**: între cuvinte cu frecvențe foarte apropiate, ordinea depinde de zgomot (și
 în `wordfreq`), nu de calitate.
 
-Pe lângă acestea, un set de teste (229) rulează la fiecare modificare; vezi `.github/`.
+Pe lângă acestea, un set de teste (230) rulează la fiecare modificare; vezi `.github/`.
 
 ## 7. Limite cunoscute
 

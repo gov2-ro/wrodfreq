@@ -57,7 +57,7 @@ for researchers.
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
 > are done — 6-source panel ingested, merged, packaged, and validated
 > (`build/validate.py`: **5/5 checks pass**, including byte-identical rebuilds).
-> 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 229 tests. Verified against a real, isolated
+> 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 230 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
 
@@ -96,7 +96,7 @@ confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (R
 ```bash
 git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
 uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
-python -m pytest tests/ -q       # 229 tests — pass with no data files at all
+python -m pytest tests/ -q       # 230 tests — pass with no data files at all
 # Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
 # most people will want data/wrodfreq.db as a release asset once one exists, and
 # just run:
