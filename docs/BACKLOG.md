@@ -692,6 +692,31 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   compound appears across many documents, a slug appears in one page's
   boilerplate many times. Nobody has measured that split yet.
 
+  **MEASURED 2026-10-05 (read-only, 0.2.0 `merged`, 6,064,995 rows). `documents` does NOT
+  discriminate; hyphen count does.**
+  - 902,490 rows (14.9%) contain a hyphen. By hyphen count: 1 → 819,273 rows (avg Zipf
+    −0.13, 6,130 in DEX, 268 at Zipf ≥3); 2 → 59,764 (223 DEX, 4 at ≥3); **≥3 → 23,453
+    rows (9 in DEX, 18 at Zipf ≥2, none above 3.2).**
+  - Of the 22,450 `web`-attested rows with ≥3 hyphens, `documents` is spread everywhere:
+    1 doc 1,394 · 2 docs 789 · 3–5 docs 8,523 · 6–20 docs 10,348 · >20 docs 1,396. A slug
+    repeats across the pages of one site, so a documents floor would keep most of it and
+    drop only the least harmful tail. Rejected as a discriminator.
+  - 97.7% (21,931) of those are single-source (`n_reliable=1`); only 40 have `n_reliable≥3`.
+    Those 40 are English or French compounds and interjections, not Romanian vocabulary:
+    `state-of-the-art`, `out-of-the-box`, `saint-germain-en-laye`, `ha-ha-ha-ha`,
+    `la-la-la-la`, `pnl-usr-plus-udmr`. All below Zipf 1.8.
+  - What the ≥3 population is: URL slugs, English page titles, chemical names
+    (`o-beta-d-galactopiranosil`), place lists (`tisa-iza-vișeu`), boilerplate
+    (`cookielawinfo-checkbox-necessary`), stuttered interjections.
+  - **Recommendation: drop rows with ≥3 hyphens when building the package (`build_package.py`),
+    keep them in `wrodfreq.db`.** Costs 23,453 shipped rows (0.39%) and no function word,
+    DEX lemma (9 rows) or row above Zipf 3.2; needs no re-ingest; reversible. Lost: ~40
+    interjection/foreign compounds, which `zipf_frequency` still answers by tokenizing and
+    combining the parts. **Not done — awaiting the owner's decision.**
+  - Larger, separate finding: the 819,273 one-hyphen rows are 13.5% of the table and only
+    6,130 are in DEX (268 at Zipf ≥3: real compounds like `cluj-napoca`, `e-mail`, mixed with
+    junk). A one-hyphen rule would need its own measurement; a hyphen cap does not touch it.
+
 - [x] **`social` source (Romanian subreddits) — ingester written and tested,
   waiting on the data download.** Started 2026-09-21. `build/ingest_social.py`
   is complete, tested end to end against a synthetic dump, and blocked only on
