@@ -1080,3 +1080,26 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   another measurement. Outcome decides whether `MAX_HYPHENS` goes down or a per-stratum
   rule is added to `build_package.py`.
 
+  **Findings from the first labelling pass (owner's notes on ~50 rows, 2026-10-05):**
+  - *Hyphen + article ending* (`site-ul`, `wp-ul`, `pnț-ului`, `idn-urilor`, `sud-coreencelor`)
+    is correct Romanian orthography for loans, abbreviations and letters. They are real
+    inflected forms of a root word and should be **K**, not junk, and exempt from any
+    junk rule. "Belonging to the root" is the lemma layer's job, not the surface table's
+    (`casei` is also its own row). The lemma layer only knows DEX roots; a hyphen-ending
+    rule (`-ul/-ului/-lui/-urile/-urilor/-lor/-uri…`) could extend it to `burrito-ul`,
+    `reload-ul`. Not started; mind roots that are also English words.
+  - *Line-break artifacts* (`lo-gica`, `do-rește`, `poli-morfe`, `pan-demie`) are junk, and
+    there is a cheap detector: the joined twin (`logica`) exists in `merged` far above the
+    hyphenated row. Measured: of 819,273 one-hyphen rows, 237,194 have a joined twin,
+    71,501 with the twin ≥1.0 Zipf higher and **35,462 with it ≥2.0 higher**. The ≥2.0 group
+    is mostly artifacts (`cele-brează`, `aca-demie`) but also native-word-plus-misplaced-
+    hyphen (`ghid-ului`, `videoclip-ului`), and a few real compounds can slip in. Candidate
+    treatment: fold these rows' counts into the twin (like `migrate_dashes.py`) rather than
+    drop them. Needs the labelled sample to check precision; not done.
+  - Other classes seen: name pairs / route pairs (`iohannis-dăncilă`, `aiud-turda`: a hyphen
+    standing for a dash), full names, sentence fragments (`banca-de`, `copacii-s`), slugs
+    without diacritics, English phrases, prefix compounds (`anti-poluare`, `ex-șefa`: keep),
+    elisions (`se-ntâlnește`: keep), verb + clitic (`trimițându-li`: keep).
+  - Proposals for 22 varied rows, for the owner to confirm or overrule:
+    `data/review/hyphen_proposals.csv` (gitignored).
+
