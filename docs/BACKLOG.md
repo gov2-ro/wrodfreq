@@ -1108,7 +1108,7 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   `docs/hyphen-labels.md`. Junk share of decided rows: dex 5%, corroborated 19%, two_sources
   44%, one_src_common 59%, one_src_rare 73% — **no stratum is safe to drop as a unit.** Best
   single detectors: joined twin ≥2.0 Zipf above (85% right, n=13), ending `-ul/-uri…` → keep
-  (91%, n=44). 40 rows stay `?` pending the owner's policy on: hyphenated Asian names, Arabic
+  (91%, n=44). 46 rows stay `?` pending the owner's policy on: hyphenated Asian names, Arabic
   `al-` names, single proper names, chemical names, time phrases, stray two-word hyphenations.
   Next step is a rule set built from those two detectors, tested on a *fresh* labelled sample,
   not a filter on the current one.
@@ -1123,6 +1123,6 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   (without the `stratum` or class columns), compare against `docs/hyphen-labels.md`'s policy,
   re-run `build/summarize_hyphen_labels.py`, and recheck what `MAX_HYPHENS = 2` and any later
   rule would drop. Questions to ask: do the K classes still hold (ending, prefix, elision)? has
-  the junk share per stratum moved? do the 40 open `?` classes now have a policy? is the
+  the junk share per stratum moved? do the open `?` classes (46 rows in 2026) now have a policy? is the
   joined-twin rule still ≥85% right? Record the outcome in this file and `docs/activity-history.md`.
 
