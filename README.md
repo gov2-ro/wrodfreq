@@ -57,7 +57,7 @@ for researchers.
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
 > are done — 6-source panel ingested, merged, packaged, and validated
 > (`build/validate.py`: **5/5 checks pass**, including byte-identical rebuilds).
-> 6,064,995 words; 180,569 lemmas; 229 tests. Verified against a real, isolated
+> 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 229 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
 
@@ -107,7 +107,7 @@ python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
 
 ## What it's for
 
-The distinctive assets are the ones worth building on: **6,064,995 words** rather than
+The distinctive assets are the ones worth building on: **6,041,542 words** rather than
 `wordfreq`'s "small" list, a floor far below Zipf 3.0, per-source retention
 (`n_reliable` / `n_attesting` / `spread` / `by_source`), six registers with period tags,
 and a lemma layer kept separate from surface forms.

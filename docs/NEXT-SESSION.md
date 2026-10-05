@@ -1,38 +1,32 @@
 # Next session — where things stand, what needs a decision
 
-Written 2026-09-09, end of the session that finished M1–M7 (all of spec §13's build
-order). Updated 2026-09-14 (check 4 recalibrated), 2026-09-17 x2 (README rewritten; DEX
-licensing discussed, still open; elision fix landed), and **2026-09-18 — check 2 is
-resolved and `validate.py` is 5/5**. Resolved items move to "Resolved since this file was
-written" below rather than being deleted, so the history of what's already been decided
-doesn't get lost. This file is a consolidated pointer, not a new source of truth —
-everything here is covered in more detail in `docs/activity-history.md`'s dated entries
-and `docs/BACKLOG.md`'s checklist. Read this first to reorient, then follow the links.
+Written 2026-09-09; **rewritten 2026-10-05**, when the six-source 0.2.0 release candidate landed.
+Resolved items move to "Resolved since this file was written" below rather than being
+deleted, so the history of what's already been decided doesn't get lost. This file is a
+consolidated pointer, not a new source of truth — everything here is covered in more detail
+in `docs/activity-history.md`'s dated entries and `docs/BACKLOG.md`'s checklist. Read this
+first to reorient, then follow the links.
 
-## Where things stand
+## Where things stand (2026-10-05)
 
-- **Pipeline: fully built and run end to end.** 5-source panel ingested (`wiki`, `web`,
-  `news`, `subs`, `eu` — 27.9B tokens), `merge.py` and `build_lemma_layer.py` both run
-  against it, `build_package.py` ships a working data file (6,050,327 words).
-- **`validate.py`: 5/5 checks pass**, and the build is idempotent (check 6 byte-identical
-  on re-run). 130 tests pass.
-- **The package works.** `pip install`ed the built wheel into a throwaway venv with no
-  access to this checkout and called every public function successfully.
-  `lemma_frequency` degrades gracefully to 0.0 — see open question 1, which is why.
-- **M7 done**: `~/devbox/otios/validate_with_wrodfreq.py` exists, wROdfreq is an editable
-  dependency there, staged as a standalone CSV — not wired into oțios's scoring.
-- **In flight: `social`, a 6th source.** `build/fetch_social.py` is acquiring 15 Romanian
-  subreddits over Arctic Shift HTTP. r/Romania comments **complete** (12,050,513 records
-  back to 2010-03-30, 844 MiB `.zst`); r/Romania posts in progress; the other 14 not
-  started. Resume after any reboot with
-  `nohup build/run_social_fetch.sh > /dev/null 2>&1 &` — `--resume` skips what is `done`.
-  Disk is no longer the constraint (~20 GiB free against a ~3.9 GiB transient peak).
-  When it lands the panel is ≥6 sources. Note the trim branch is **already active** — 69,939 rows
-  have `n_reliable=5` today — so a 6th source does not newly reach it; what changes is
-  that the trim drops max and min from 6 values leaving 4 to mean instead of 3, and more
-  words clear the ≥5 threshold at all. `validate.py` checks 1 and 2 still want re-reading.
-- **`merged` is 6,050,118 rows** (was 6,050,327; the apostrophe migration closed a residue
-  class). **224 tests**, `validate.py` **5/5** with check 6 byte-identical.
+- **Version 0.2.0, a release candidate. Not published.** Six sources (`web`, `news`,
+  `subs`, `social`, `wiki`, `eu` — 28.75B tokens), 6,064,995 words in `merged`, of which
+  **6,041,542 ship** (rows with 3+ hyphens stay in the database only), 180,569 lemmas.
+  `validate.py` 5/5 (concordance 0.948), ~230 tests, CI green on GitHub.
+- **The lemma layer now ships** as `ro_lemma.msgpack.xz` (1.1 MB): `lemma_frequency()`
+  and `lemma_detail()` read it, and fall back to the surface value for a non-lemma. This
+  replaces the old "ship nothing until DEX answers" stance — it assumes DEX Online will say
+  yes. If it says no, the file comes out (see open question 1).
+- **Docs for readers, in Romanian:** `docs/method.md`, `docs/sources.md`.
+- **Hyphenated rows:** the 3+-hyphen rows are dropped from the package; the 819k one-hyphen
+  rows are being reviewed by hand — `docs/hyphen-labels.md`, BACKLOG ("Label the one-hyphen
+  rows", "Re-validate the hyphen decisions"). 46 sampled rows still need the owner's policy.
+- **M7 exists** (`~/devbox/otios/validate_with_wrodfreq.py`, wROdfreq as an editable
+  dependency there) but its text still says five sources; re-run it against 0.2.0.
+- **What stands between here and a release:** the DEX answer; a `LICENSE` file and the
+  data-licence wording (Reddit and OpenSubtitles have no formal redistribution licence —
+  only counts are shipped); `data/wrodfreq.db` is 4.09 GB against GitHub's 2 GiB per-asset
+  cap, so it needs compressing or splitting; choose PyPI trusted publishing or manual upload.
 
 ## How work is organised now
 
@@ -61,23 +55,15 @@ residue, which had been blocking the social ingest.
 
 ## Open questions — need your decision, not more building
 
-### 1. DEX Online licensing — DEFERRED ON PURPOSE, 2026-09-21. Do not pick this up.
+### 1. DEX Online licensing — the request is drafted, not sent
 
-**Decision: the project stays in development and gets built as good as it can be first;
-the conversation with dexonline.ro happens after that, not before.** Stop treating this
-as the blocking item — earlier revisions of this file said it was, and that is no longer
-the plan.
-
-What that means in practice: `lemma_zipf` in `data/wrodfreq.db` holds 180,820 real,
-validated lemma frequencies, and they stay local. `lemma_frequency()` returning 0.0 in
-the shipped package is the intended state for now, and its graceful degradation is
-already tested. Keep building and testing the lemma layer locally; just don't ship it
-and don't gate other work on the licence answer.
-
-Background, still accurate: what would eventually be redistributed is a plain word list
-plus numbers, not DEX's dictionary text, so the risk was assessed as low (2026-09-17).
-That assessment is why deferring is safe rather than a gamble — nothing about the answer
-is expected to invalidate the work done in the meantime.
+`docs/dex-online-cerere.md` is a Romanian draft (needs a name and address). It asks about
+(1) the derived per-lemma numbers, (2) redistributing the form→lemma map as a release
+asset, (3) attribution. Until DEX answers: do not publish to PyPI with `ro_lemma.msgpack.xz`
+inside, or publish without it (a one-line change in `build_package.py`), and do not attach
+`inflected_forms.db` to a release. The extractor that rebuilds that file from DEX's own dump
+is in `tools/dex_extractor/`, so "no" is survivable. When the answer arrives, write the terms
+into `docs/method.md` §5 and `docs/sources.md`.
 
 ### 2. How much should oțios's scoring weight the new corroboration signal?
 
@@ -88,20 +74,12 @@ for the reasoning. A real editorial decision about oțios's product, not an engi
 task: does "attested by N independent modern corpora" belong in the shortlist score at
 all, and if so at what weight relative to the existing historical-attestation score?
 
-## Small, genuinely optional — measured and logged, nobody is blocked
+## Open, small, none blocking
 
-Both are `- [ ]` entries at the end of `docs/BACKLOG.md` with the measurements attached.
-
-- **Non-Romanian diacritics split foreign words mid-token** (`Düsseldorf` → `d` +
-  `sseldorf`). Real pollution of the *low* frequencies, but single-letter values track
-  wordfreq's within ~0.05, so the damage is spurious rare entries rather than corrupted
-  common ones — the opposite of the elision bug in severity. Widening the character class
-  is a spec §3 decision and deserves the same measure-first treatment the combining-form
-  question got.
-- **`zipf_frequency` doesn't tokenize its argument; wordfreq's does.** Only diverges on
-  input that isn't a single token (`zipf_frequency('spune-')` → 0.0 here, 5.78 there,
-  because wordfreq answers for `spune`). Worth a deliberate call before 1.0, since
-  matching it means deciding what a multi-token argument should return.
+All are `- [ ]` entries at the end of `docs/BACKLOG.md`: the API hyphen-splitting fallback
+(to be discussed later), the legacy-diacritic normalisation (rides the next re-ingest),
+labelling the one-hyphen rows, and re-validating those decisions. The foreign-diacritics and
+`zipf_frequency` tokenization questions this file used to carry are decided (ADR-002, ADR-001).
 
 ## Also noticed, not acted on
 
@@ -109,8 +87,7 @@ Both are `- [ ]` entries at the end of `docs/BACKLOG.md` with the measurements a
   the payload twice in one run — so a `validate.py` run that straddles UTC midnight will
   compare two different `built` values and fail idempotence spuriously. Tiny window, real
   flake. Nothing has hit it; noting it so it isn't debugged from scratch if it ever does.
-- **DEX Online licensing outreach still unsent** — see open question 1. Listed twice on
-  purpose.
+- **DEX Online request still unsent** — see open question 1.
 - **Unrelated pre-existing issue in oțios, not caused by this work**:
   `~/devbox/otios/docs/wordfreq-recipe.md` shows as deleted in that repo's working tree,
   uncommitted, last touched 2026-08-11. Left exactly as found — worth a look next time
@@ -154,6 +131,6 @@ Both are `- [ ]` entries at the end of `docs/BACKLOG.md` with the measurements a
 ```bash
 cd ~/devbox/gov2/wrodfreq
 python build/status.py          # point-in-time pipeline progress
-python build/validate.py        # all 6 checks (~10-12 min; rebuilds merged/lemma_zipf/package)
-python -m pytest tests/ -q      # 130 tests, well under a second
+python build/validate.py        # 5 checks + idempotence (~12 min; rebuilds merged/lemma_zipf/package)
+python -m pytest tests/ -q      # ~230 tests, well under a second
 ```

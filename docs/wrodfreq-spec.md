@@ -159,7 +159,7 @@ form_lemma(form, lemma, lexeme_id, n_lemmas) 1,633,231 rows   200,601 of them am
 This is a **complete, hand-curated Romanian morphological paradigm map** — not a
 statistical lemmatizer's guesses. Nothing equivalent is available as a drop-in resource,
 and it is what makes §9 possible. Ship it as a release artifact (SQLite, ~a few hundred
-MB, compresses well), with `extract_inflected_forms.py` vendored so the provenance is
+MB, compresses well), with `extract_inflected_forms.py` copied into `tools/dex_extractor/` (it was planned as `vendor/`) so the provenance is
 reproducible.
 
 **Licensing is a real question, resolve it before publishing.** DEX Online's data is
@@ -566,7 +566,7 @@ wrodfreq/
 │   ├── build_lemma_layer.py
 │   ├── build_package.py
 │   └── validate.py
-├── vendor/
+├── tools/dex_extractor/
 │   └── extract_inflected_forms.py   # from oțios, for provenance (§5)
 ├── tests/
 │   ├── test_tokenizer.py      # identical token streams across every ingester

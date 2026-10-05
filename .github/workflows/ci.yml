@@ -66,7 +66,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,build]"
       - name: Every build script compiles
-        run: python -m compileall -q build/
+        run: python -m compileall -q build/ tools/
+      - name: The DEX extractor (tools/) responds
+        run: python tools/dex_extractor/extract_inflected_forms.py --help > /dev/null
       - name: Every build script's CLI responds
         run: |
           set -e

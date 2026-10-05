@@ -1346,3 +1346,16 @@ is 6,041,542 words (was 6,064,995), by_source and lemma files unchanged in shape
 `wrodfreq.db`. Test added (230 pass). Corrected a mistake in the earlier recommendation: the
 tokenizer keeps hyphenated words whole, so dropped rows answer 0.0, not a combined value. The
 one-hyphen rows (819,273, 13.5% of the table, 6,130 in DEX) are still unmeasured.
+
+## 2026-10-05 (evening) — extractor copied in, stale docs refreshed
+
+Copied oțios's `extract_inflected_forms.py` and the `dump_parser.py` it imports, unchanged, to
+`tools/dex_extractor/` (with a README recording the oțios commit `e3dbcd4` and the rule that any
+edit is a fork). It is provenance only — never run by the pipeline — and lives outside `build/`
+because the release CI runs `--help` on every `build/*.py`; CI now compiles `tools/` and checks the
+extractor's `--help`. The empty `vendor/` is gone; spec §5 and the layout now say `tools/dex_extractor/`.
+
+Refreshed what had gone stale: `CLAUDE.md` ("spec only, no code yet" → built, 0.2.0 RC; commands no
+longer "to be created"; validation text now says concordance ≥0.93 and ~60 pairs; the >10× source-size
+note) and `docs/NEXT-SESSION.md` (rewritten for six sources, the shipped lemma layer, and the DEX
+request). README's heading and count edits committed with this change.

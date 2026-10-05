@@ -2,23 +2,32 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Current state: spec only, no code yet
+## Current state: built — 0.2.0 release candidate (2026-10-05)
 
-The repo holds four documents and nothing else. Everything below the "Commands" heading
-describes work that is **planned, not present** — `pyproject.toml`, `wrodfreq/`, `build/`
-and `tests/` all still have to be created. Before writing any code, read
-`docs/wrodfreq-spec.md` end to end; it is the authoritative design and this file only
-summarises the parts that are easy to get wrong.
+All seven build milestones are done. Six sources ingested (28.75B tokens), 6,064,995
+words in `merged` (6,041,542 shipped), lemma layer of 180,569 lemmas, `validate.py` 5/5,
+~230 tests, CI green. **Not yet published** — see `docs/BACKLOG.md` for what stands
+between this and a release (DEX licence answer, data-licence wording, `LICENSE` file, the
+4 GB database vs GitHub's 2 GiB asset cap). Read `docs/wrodfreq-spec.md` for the design;
+it is still authoritative, with ADRs in `docs/decisions/` amending it.
 
 - `docs/wrodfreq-spec.md` — the build spec (schema §7.1, merge §8, lemma layer §9, API
   §10, validation §11, layout §12, milestones §13, traps §14).
+- `docs/method.md`, `docs/sources.md` — the public methodology and the six corpora, **in
+  Romanian**, for readers of the table. Keep their numbers true when the table changes.
 - `docs/wordfreq-recipe.md` — why the parent project (oțios) rejected this method for
   *its* question, and the measurements behind that. Read §§1–8 before arguing with any
   design decision here; most objections are already answered there.
 - `docs/BACKLOG.md` — open bugs/debt/enhancements, `- [ ]` entries with enough context to act on.
 - `docs/activity-history.md` — chronological log, entries under `## YYYY-MM-DD — Short Title`.
+- `docs/NEXT-SESSION.md` — where things stand and what needs a human decision.
+- `docs/decisions/` (ADRs), `docs/briefs/` (self-contained task briefs),
+  `docs/hyphen-labels.md` (the labelled hyphen-row sample and its policy),
+  `docs/dex-online-cerere.md` (draft request to DEX Online, **not sent**).
+- `tools/dex_extractor/` — unchanged copy of oțios's DEX extractor, for provenance only;
+  not part of the pipeline.
 
-Keep both of those files current as work lands.
+Keep `BACKLOG.md` and `activity-history.md` current as work lands.
 
 ## What this project is
 
@@ -81,8 +90,11 @@ ingester.
 **The one data asset to reuse, not rebuild:** `~/devbox/otios/data/processed/inflected_forms.db`
 (203 MB; 317,721 lexemes, 2,269,003 inflected forms, 1,633,231 form→lemma rows of which
 200,601 are ambiguous). A hand-curated DEX paradigm map, not a lemmatizer's guesses.
-Vendor `extract_inflected_forms.py` for provenance, and resolve the DEX Online licence
-question before redistributing it. **Do not** reuse oțios's `corpus_frequencies.db` counts
+The extractor is copied, unchanged, into `tools/dex_extractor/` for provenance. The DEX
+Online licence question is **still open**: the lemma layer ships in the wheel as
+`ro_lemma.msgpack.xz` on the assumption that permission will be granted, and if it is
+refused that file must come out of the package (`build_package.py`) and the form→lemma map
+must not be redistributed. **Do not** reuse oțios's `corpus_frequencies.db` counts
 — they are DEX-restricted with a wrong denominator. The code transfers; the numbers do not.
 
 ## The merge rules that decide whether the table is right
@@ -95,7 +107,7 @@ question before redistributing it. **Do not** reuse oțios's `corpus_frequencies
   consumer code or tests — a pinned constant breaks the day a source lands.
 - **Trim only at ≥5 reliable sources** (drop max and min, mean the rest). At 3–4 use a
   plain mean; trimming three values leaves one, which is "pick the middle corpus".
-- **Never weight sources by size.** CulturaX is ~200× the next source, so size-weighting
+- **Never weight sources by size.** CulturaX is >10× the next source (23.8B vs 2.2B tokens in 0.2.0; it was ~200× against Wikipedia alone), so size-weighting
   reduces to "CulturaX with extra steps" and defeats the trim.
 - **Tag every source with a `period`** (`contemporary` / `mixed` / `historical`) and make
   the default merge contemporary-only. `books` is 19th–early-20th century; CoRoLa spans
@@ -119,33 +131,38 @@ Two different signals for two different questions — do not unify them. Extensi
 (`frequency_detail`, `lemma_frequency`, `by_source`, `build_info`) are clearly marked as
 extensions, and the lemma layer must degrade gracefully when the paradigm map is absent.
 
-## Commands (to be created — none of this exists yet)
+## Commands
 
 Follow oțios's "one script per pipeline stage" convention; every stage resumable and
-idempotent. Planned pipeline, in order:
+idempotent. The pipeline, in order:
 
 ```bash
-python build/ingest_wiki.py       # then news, subs, eu, web — writes source_counts + sources
+python build/ingest_wiki.py       # then news, subs, eu, web, social — writes source_counts + sources
 python build/compute_zipf.py      # per-source zipf + reliable flag
 python build/merge.py             # trimmed mean → merged
 python build/build_lemma_layer.py # needs inflected_forms.db; optional
-python build/build_package.py     # → wrodfreq/data/ro_surface.msgpack.xz
+python build/build_package.py     # → wrodfreq/data/ro_{surface,by_source,lemma}.msgpack.xz
+                                  #   (rows with 3+ hyphens are left out of the package, not the db)
 python build/validate.py          # must run in CI and fail the build
 ```
 
 Ingesters are multi-hour to multi-day jobs that *will* be killed — checkpoint from the
 first commit, and run them under the status/health-check/audit triad.
+Tests: `python -m pytest -q` (no data files needed). Release gate: `.github/workflows/release-check.yml`
+on a `v*` tag; `validate.py` itself cannot run in CI (the 4 GB database is not in git) — run it
+locally before tagging.
 
 ## Validation is the gate
 
 `validate.py` must fail the build. The one check that catches the worst bug in the spec:
 **function words land in Zipf 6.0–7.5** (`de`, `și`, `la`, `un`, `cu`) — if they do not,
-the denominator is wrong. Then: Spearman ρ > 0.9 against `wordfreq`'s Romanian over its
-covered range (a lower value is a tokenizer/normalisation divergence, not a discovery);
-~50 hand-written monotone pairs; ≥95% coverage of DEX lemmas with `frequency > 0.5` (a
-gap means the vocabulary filter crept back); a printed top-100-by-`spread` report to read
-by eye; and **idempotence** — re-running stages 2–5 on unchanged `source_counts` must
-produce a byte-identical data file.
+the denominator is wrong. Then: **conditional pairwise concordance ≥ 0.93** against
+`wordfreq`'s Romanian where it separates two words by ≥0.3 Zipf (Spearman ρ is printed but
+no longer gated — it scores `wordfreq`'s own ties; spec §11.2); ~60 hand-written monotone
+pairs; ≥95% coverage of DEX lemmas with `frequency ≥ 0.8` (a gap means the vocabulary
+filter crept back); a printed top-100-by-`spread` report to read by eye; and
+**idempotence** — re-running stages 2–5 on unchanged `source_counts` must produce a
+byte-identical data file.
 
 ## Build order
 
