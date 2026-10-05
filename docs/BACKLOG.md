@@ -1022,3 +1022,5 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   0.047% of web tokens. Needs the measure-first treatment once more before landing: re-read
   raw text with the new `normalize()` beside the old one, and check that `tokenize(t) == [t]`
   still holds for every `merged` key. Trigger: any change that forces a full re-ingest.
+
+- [ ] add Mermaid charts to Methodology or README?

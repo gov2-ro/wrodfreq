@@ -1,5 +1,54 @@
 # wROdfreq
 
+ↆ 🤖 LLM blabber (de tradus) 
+
+## 🇷🇴
+
+wROdfreq este un tabel de frecvență a cuvintelor pentru limba română, calculat pe scara
+Zipf din șase corpusuri deschise (web, presă, subtitrări, conversații online, Wikipedia,
+texte UE — 28,8 miliarde de cuvinte în total). Inspirat de [`wordfreq`](https://github.com/rspeer/wordfreq) și [voroave neglijate](https://github.com/gov2-ro/voroave). 
+Se instalează din sursă deocamdată (nu este încă publicat pe PyPI — vezi mai sus) și 
+oferă o interfață compatibilă 1:1 cu biblioteca `wordfreq` — se schimbă o singură linie de import.
+
+Este mai bun decât suportul `wordfreq` pentru română, care folosește doar trei surse,
+doar lista "small" și un prag minim de Zipf 3.0. wROdfreq adaugă și un lucru pe care
+nicio altă resursă de frecvență nu îl publică: gradul de confirmare per sursă
+(`n_reliable`, `n_attesting`, `spread`) — câte din cele șase surse confirmă fiecare
+cuvânt, nu doar o medie. Un strat de frecvențe per lemă, derivat din paradigmele
+flexionare din DEX (180.569 leme), este inclus în pachet; termenii de redistribuire ai
+DEX Online sunt încă în curs de confirmare. Metodologia completă: [`docs/method.md`](docs/method.md).
+
+Nu este un lematizator, un etichetator gramatical (POS tagger) sau o distribuție de
+corpus — vezi [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §2.
+
+---
+
+## English — Simplified Technical English (ASD-STE100 style)
+
+wROdfreq gives word-frequency data for the Romanian language. The data comes from five
+open text collections (27.8 billion words in total). wROdfreq uses the Zipf scale to
+show how common each word is.
+
+wROdfreq is not yet on PyPI. You must install it from source for now — see the build
+instructions above.
+
+wROdfreq has the same interface as the `wordfreq` tool. You can change one import line
+to use wROdfreq instead of `wordfreq`.
+
+wROdfreq is better than the Romanian data in `wordfreq`. The `wordfreq` tool uses only
+three text collections. It shows only the "small" word list. It does not show words with
+a Zipf value below 3.0.
+
+wROdfreq adds one new type of data: it shows how many of the six sources confirm each
+word, not only an average. A frequency value for each word lemma is also in the package
+(from DEX dictionary word-form data). The dictionary's terms for this use are still being
+confirmed.
+
+wROdfreq is not a lemmatizer. wROdfreq is not a part-of-speech tagger. wROdfreq is not a
+text-collection product.
+
+--- 
+
 A Romanian word-frequency table on the Zipf scale, built from 6 open corpora (28.8B
 tokens total), designed to ship as `pip install wrodfreq` with an API that is drop-in
 compatible with [`wordfreq`](https://github.com/rspeer/wordfreq) — plus the raw SQLite
@@ -111,52 +160,6 @@ Online.
 
 In one sentence: **it tells you not just how common a Romanian word is, but how much the
 corpora agree — and for a rare word, agreement is the more useful number.**
-
----
-
-## Română
-
-wROdfreq este un tabel de frecvență a cuvintelor pentru limba română, calculat pe scara
-Zipf din șase corpusuri deschise (web, presă, subtitrări, conversații online, Wikipedia,
-texte UE — 28,8
-miliarde de cuvinte în total). Se instalează din sursă deocamdată (nu este încă publicat
-pe PyPI — vezi mai sus) și oferă o interfață compatibilă 1:1 cu biblioteca `wordfreq` —
-se schimbă o singură linie de import.
-
-Este mai bun decât suportul `wordfreq` pentru română, care folosește doar trei surse,
-doar lista "small" și un prag minim de Zipf 3.0. wROdfreq adaugă și un lucru pe care
-nicio altă resursă de frecvență nu îl publică: gradul de confirmare per sursă
-(`n_reliable`, `n_attesting`, `spread`) — câte din cele șase surse confirmă fiecare
-cuvânt, nu doar o medie. Un strat de frecvențe per lemă, derivat din paradigmele
-flexionare din DEX (180.569 leme), este inclus în pachet; termenii de redistribuire ai
-DEX Online sunt încă în curs de confirmare. Metodologia completă: [`docs/method.md`](docs/method.md).
-
-Nu este un lematizator, un etichetator gramatical (POS tagger) sau o distribuție de
-corpus — vezi [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §2.
-
-## English — Simplified Technical English (ASD-STE100 style)
-
-wROdfreq gives word-frequency data for the Romanian language. The data comes from five
-open text collections (27.8 billion words in total). wROdfreq uses the Zipf scale to
-show how common each word is.
-
-wROdfreq is not yet on PyPI. You must install it from source for now — see the build
-instructions above.
-
-wROdfreq has the same interface as the `wordfreq` tool. You can change one import line
-to use wROdfreq instead of `wordfreq`.
-
-wROdfreq is better than the Romanian data in `wordfreq`. The `wordfreq` tool uses only
-three text collections. It shows only the "small" word list. It does not show words with
-a Zipf value below 3.0.
-
-wROdfreq adds one new type of data: it shows how many of the six sources confirm each
-word, not only an average. A frequency value for each word lemma is also in the package
-(from DEX dictionary word-form data). The dictionary's terms for this use are still being
-confirmed.
-
-wROdfreq is not a lemmatizer. wROdfreq is not a part-of-speech tagger. wROdfreq is not a
-text-collection product.
 
 ---
 
