@@ -1,6 +1,8 @@
 # wROdfreq
 
+
 ↆ 🤖 LLM blabber (de tradus) 
+
 
 ## 🇷🇴
 
@@ -23,7 +25,20 @@ corpus — vezi [`docs/wrodfreq-spec.md`](docs/wrodfreq-spec.md) §2.
 
 ---
 
-## 🇬🇧 English — Simplified Technical English (ASD-STE100 style)
+- [Summary](#summary)
+- [Schematic overview](#schematic-overview)
+- [Usage](#usage)
+- [What it's for](#what-its-for)
+  - [Where it does something nothing else can](#where-it-does-something-nothing-else-can)
+  - [Conventional, but well served](#conventional-but-well-served)
+  - [What it is not](#what-it-is-not)
+- [Roadmap](#roadmap)
+- [Docs](#docs)
+- [Relationship to oțios/voroave](#relationship-to-oțiosvoroave)
+- [Building it yourself](#building-it-yourself)
+
+
+## Summary
 
 wROdfreq gives word-frequency data for the Romanian language. The data comes from six
 open text collections (28.8 billion words in total). wROdfreq uses the Zipf scale to
@@ -54,12 +69,27 @@ tokens total), designed to ship as `pip install wrodfreq` with an API that is dr
 compatible with [`wordfreq`](https://github.com/rspeer/wordfreq) — plus the raw SQLite
 for researchers.
 
+
+## Schematic overview
+
+![Build pipeline of wROdfreq. Six open corpora are counted separately into source_counts and sources. compute_zipf.py writes source_zipf, still per source. merge.py derives the merged table without overwriting the source tables. An optional side branch, build_lemma_layer.py, uses the DEX map to write the separate lemma_zipf table. build_package.py writes three data files for the pip package wrodfreq. validate.py runs last, reads the tables and two reference inputs, and fails the build when a check fails. The raw SQLite database is a second output.](docs/figures/pipeline-en.png)
+
+`diagram-designer` agent by [iello](https://github.com/iello/)
+
+Two SQLite tables underpin all of this: per-source surface-form counts (raw) and a
+separate lemma rollup (derived) — you can roll counts up, you cannot un-roll them. The
+merge is always computed from the raw counts, never stored in place over them.
+
+---
+
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
 > are done — 6-source panel ingested, merged, packaged, and validated
 > (`build/validate.py`: **5/5 checks pass**, including byte-identical rebuilds).
 > 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 230 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
+
+## Usage
 
 ```python
 from wrodfreq import zipf_frequency, word_frequency, top_n_list
@@ -91,17 +121,7 @@ reports zero, and this table keeps the two apart (see `docs/wrodfreq-spec.md` §
 (180,569 lemmas) ships in the package; DEX Online's redistribution terms are still being
 confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (Romanian).
 
-### Building it yourself
 
-```bash
-git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
-uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
-python -m pytest tests/ -q       # 230 tests — pass with no data files at all
-# Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
-# most people will want data/wrodfreq.db as a release asset once one exists, and
-# just run:
-python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
-```
 
 ---
 
@@ -163,15 +183,6 @@ corpora agree — and for a rare word, agreement is the more useful number.**
 
 ---
 
-## Schematic overview
-
-![Build pipeline of wROdfreq. Six open corpora are counted separately into source_counts and sources. compute_zipf.py writes source_zipf, still per source. merge.py derives the merged table without overwriting the source tables. An optional side branch, build_lemma_layer.py, uses the DEX map to write the separate lemma_zipf table. build_package.py writes three data files for the pip package wrodfreq. validate.py runs last, reads the tables and two reference inputs, and fails the build when a check fails. The raw SQLite database is a second output.](docs/figures/pipeline-en.png)
-
-`diagram-designer` agent by [iello](https://github.com/iello/)
-
-Two SQLite tables underpin all of this: per-source surface-form counts (raw) and a
-separate lemma rollup (derived) — you can roll counts up, you cannot un-roll them. The
-merge is always computed from the raw counts, never stored in place over them.
 
 ## Roadmap
 
@@ -219,7 +230,8 @@ publishing and the DEX licensing question — see [`docs/BACKLOG.md`](docs/BACKL
 - [`docs/NEXT-SESSION.md`](docs/NEXT-SESSION.md) — where things stand and what's still
   an open decision, for picking this back up cold.
 
-## Relationship to oțios
+
+## Relationship to oțios/voroave
 
 Spin-off of [voroave neglijate](https://github.com/gov2-ro/voroave)
 (local path: `~/devbox/otios/`). Code is copied in, never imported at runtime. oțios asks
@@ -232,3 +244,16 @@ oțios installs this project as an editable dependency and uses its corroboratio
 (`n_reliable`/`n_attesting`/`spread`) to screen oțios's own "forgotten word" candidates —
 resolving 25.7% zero-signal on that project's real candidate list, against the ~99.6%
 zero-signal `wordfreq` gave it before.
+
+
+## Building it yourself
+
+```bash
+git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
+uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
+python -m pytest tests/ -q       # 230 tests — pass with no data files at all
+# Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
+# most people will want data/wrodfreq.db as a release asset once one exists, and
+# just run:
+python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
+```

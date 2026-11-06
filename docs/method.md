@@ -1,5 +1,20 @@
 # Metodologia wROdfreq
 
+- [1. Ce este și ce nu este](#1-ce-este-și-ce-nu-este)
+- [2. Scara Zipf, pe scurt](#2-scara-zipf-pe-scurt)
+- [3. Pașii, în ordine](#3-pașii-în-ordine)
+  - [Pasul 1 — Împărțim textul în cuvinte (tokenizare)](#pasul-1--împărțim-textul-în-cuvinte-tokenizare)
+  - [Pasul 2 — Numărăm, pe sursă](#pasul-2--numărăm-pe-sursă)
+  - [Pasul 3 — Calculăm valoarea Zipf, pe sursă](#pasul-3--calculăm-valoarea-zipf-pe-sursă)
+  - [Pasul 4 — Cine are voie să vorbească? (pragul)](#pasul-4--cine-are-voie-să-vorbească-pragul)
+  - [Pasul 5 — Combinăm sursele](#pasul-5--combinăm-sursele)
+- [4. Ce primești pentru un cuvânt](#4-ce-primești-pentru-un-cuvânt)
+- [5. Stratul de leme](#5-stratul-de-leme)
+- [6. Cum verificăm că tabelul e bun](#6-cum-verificăm-că-tabelul-e-bun)
+- [7. Limite cunoscute](#7-limite-cunoscute)
+- [8. Versiuni și citare](#8-versiuni-și-citare)
+- [9. Cum se reface totul de la zero](#9-cum-se-reface-totul-de-la-zero)
+
 Acest document explică, pas cu pas și fără termeni de specialitate, cum se obține
 numărul pe care îl vezi când scrii `zipf_frequency('cuvânt')`. Cine vrea să cite tabelul
 într-o lucrare găsește la final ce să scrie. Sursele sunt descrise în
