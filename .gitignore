@@ -29,8 +29,10 @@ htmlcov/
 .env.*
 
 # Data artifacts — corpora, checkpoints, the built SQLite table, the packaged
-# surface-table blob. No .db or .csv in git, ever; large artifacts ship as
-# GitHub release assets or get rebuilt by build/build_package.py, never committed.
+# surface-table blob. No .db or .csv in git, ever. The one data table in git is
+# release/ro_surface.tsv.gz. The rest gets rebuilt or goes to a data repository (spec §10.2).
+# Remove the release/ line after the review, when the TSV goes into the repository.
+release/
 /data/
 *.db
 *.csv

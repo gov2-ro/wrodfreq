@@ -16,6 +16,7 @@ check that notices when someone swaps a `set` for a `dict` iteration order or a
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import importlib.util
 import json
@@ -242,3 +243,28 @@ def test_package_leaves_out_rows_with_three_or_more_hyphens(db):
     assert "cluj-napoca" in words and "a-b-c" in words     # 1 and 2 hyphens stay
     assert "a-b-c-d" not in words                          # 3 hyphens go
     assert db.execute("SELECT 1 FROM merged WHERE word='a-b-c-d'").fetchone() is not None
+
+
+def test_tsv_export_matches_package_and_is_byte_identical(db, tmp_path):
+    export_tsv = _load("export_tsv")
+    _build_all(db)
+    db.execute("INSERT INTO merged (word, zipf, n_reliable, n_attesting, n_sources, spread) "
+               "VALUES ('a-b-c', 2.0, 1, 1, 5, 0), ('a-b-c-d', 2.0, 1, 1, 5, 0)")
+    first, second = tmp_path / "a" / "t.tsv.gz", tmp_path / "b" / "t.tsv.gz"
+    count = export_tsv.export_tsv(db, first)
+    export_tsv.export_tsv(db, second)
+    assert first.read_bytes() == second.read_bytes()
+
+    lines = gzip.decompress(first.read_bytes()).decode().splitlines()
+    assert lines[0] == "word\tzipf\tn_reliable\tn_attesting\tspread"
+    rows = [line.split("\t") for line in lines[1:]]
+    assert len(rows) == count
+    assert [float(r[1]) for r in rows] == sorted((float(r[1]) for r in rows), reverse=True)
+
+    surface = build_package.build_payloads(db)[0]
+    assert {r[0] for r in rows} == set(surface["words"])   # the same rows, 3+ hyphens gone
+    for r in rows:
+        i = surface["words"].index(r[0])
+        assert round(float(r[1]) * surface["zipf_scale"]) == surface["zipf"][i]
+        assert (int(r[2]), int(r[3])) == (surface["n_reliable"][i], surface["n_attesting"][i])
+        assert round(float(r[4]) * surface["zipf_scale"]) == surface["spread"][i]

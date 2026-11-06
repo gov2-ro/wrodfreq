@@ -4,6 +4,18 @@ Written 2026-10-05. **A proposal with measurements, not a decision.** The open c
 at the end. Context: `data/wrodfreq.db` cannot go on a GitHub release as it is, and the
 spec (§10.2) promised "the full `wrodfreq.db` as a GitHub release asset".
 
+**Decided 2026-11-06 (spec §10.2 now records this; it replaces the conflicting text below):**
+
+- The final table goes **in the repository** as `release/ro_surface.tsv.gz`: 6,041,542 rows,
+  34.1 MiB, and 155 MB unpacked. `build/export_tsv.py` writes it.
+- The project **will not publish the light database**. The TSV replaces it.
+- The full database goes to **a data repository, not GitHub**. The project does not put a
+  copy on a GitHub release.
+- The README states that the full database exists.
+- The TSV stays out of git during the review. The owner shares it from Google Drive.
+- The code is under EUPL 1.2 (`LICENSE.txt`). The data is under CC BY-SA 4.0. This does not
+  settle the Reddit and OpenSubtitles question below.
+
 ## What was measured (0.2.0 build, 2026-10-05)
 
 | artifact | size |
@@ -59,7 +71,7 @@ asset.
 - **The licence wording.** `social` (Reddit) and `subs` (OpenSubtitles) have no formal
   redistribution licence; only aggregate counts are shipped, never text or author names. A
   public, indexed host makes the wording in the dataset card matter more.
-- **A `LICENSE` file** and the data-licence statement do not exist yet.
+- **A `LICENSE` file** and the data-licence statement exist since 2026-11-07 (see the README).
 
 ## How `wordfreq` did it
 
@@ -83,8 +95,10 @@ exact build in the file names.
 
 ## Decisions for the owner
 
-1. Full counts on **Zenodo** (DOI) or **Hugging Face** (reach), or both?
-2. Publish the light database on GitHub, yes or no?
+1. Full counts on **Zenodo** (DOI) or **Hugging Face** (reach), or both, or another data
+   repository?
+2. ~~Publish the light database on GitHub, yes or no?~~ No. Decided 2026-11-06: the TSV in
+   the repository replaces it.
 3. Keep `documents` in the full counts (it is the independence signal) or drop it from
    everything public?
 4. Include the lemma table in public databases before DEX answers, or hold it?

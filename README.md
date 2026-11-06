@@ -85,7 +85,7 @@ merge is always computed from the raw counts, never stored in place over them.
 > **Status: built and working.** All 7 build milestones (`docs/wrodfreq-spec.md` §13)
 > are done — 6-source panel ingested, merged, packaged, and validated
 > (`build/validate.py`: **5/5 checks pass**, including byte-identical rebuilds).
-> 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 230 tests. Verified against a real, isolated
+> 6,041,542 words (plus 23,453 URL-slug rows kept only in the database); 180,569 lemmas; 231 tests. Verified against a real, isolated
 > `pip install` of the built wheel. **Not yet published to PyPI** — build the wheel
 > yourself for now (see below).
 
@@ -124,6 +124,43 @@ confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (R
 
 
 ---
+
+## Getting the data
+
+| You want | Use | Size |
+|---|---|---|
+| Lookups from Python | `pip install wrodfreq` (not published yet) | 39.7 MB of data |
+| The final table, without Python | `ro_surface.tsv.gz` — review copy: LINK-TO-BE-ADDED | 34.1 MiB (155 MB unpacked) |
+| The raw counts per source, to check or rerun the method | `wrodfreq.db`, the full database | 4.09 GB |
+
+The TSV holds one row per word, with the most frequent words first. Its columns are `word`,
+`zipf`, `n_reliable`, `n_attesting` and `spread`. It has the same rows and values as the
+package.
+
+The TSV is a **review copy of build 0.2.0** and can change. It moves into this repository
+after the review. SHA-256:
+`06f85c941e0ce8f3ef8cf9b5f04b6dc37cedb9b2c12faa75463eea66b8502fc3`.
+
+Of the 6,041,542 words, 4,838,839 (80%) are reliable in only one source. For a cleaner list,
+keep the rows with `n_reliable >= 2` (1,202,703 words).
+
+**The full database exists, but it is not in this repository.** It is the output of the
+build pipeline. It holds the raw counts for each source, including the words below the
+reliability floor, and only these counts let you rerun the merge without a multi-day ingest.
+We intend to publish it in a data repository, not on GitHub. We have not chosen the data
+repository yet.
+
+## Licence
+
+- **Code:** licensed under the [EUPL 1.2](LICENSE.txt).
+- **Data** (the TSV and the files in `wrodfreq/data/`): licensed under
+  [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). Credit wROdfreq and name the
+  build.
+- **The corpora** keep their own terms, listed in [`docs/sources.md`](docs/sources.md). This
+  project ships aggregate counts only, never corpus text. The CC BY-SA licence covers only
+  the rights of this project. Reddit and OpenSubtitles have no formal redistribution licence.
+- **The lemma layer** (`ro_lemma.msgpack.xz`) depends on DEX Online's answer, which is still
+  open. The TSV does not contain it.
 
 ## What it's for
 
@@ -251,9 +288,10 @@ zero-signal `wordfreq` gave it before.
 ```bash
 git clone git@github.com:gov2-ro/wrodfreq.git && cd wrodfreq
 uv pip install -e ".[dev]"       # msgpack is the only runtime dependency; dev adds pytest
-python -m pytest tests/ -q       # 230 tests — pass with no data files at all
+python -m pytest tests/ -q       # 231 tests — pass with no data files at all
 # Full corpus re-ingestion is a multi-day job (see docs/wrodfreq-spec.md §13) —
-# most people will want data/wrodfreq.db as a release asset once one exists, and
-# just run:
+# most people will want the published wrodfreq.db once it exists (see "Getting the
+# data"), put it at data/wrodfreq.db, and just run:
 python build/build_package.py    # compiles wrodfreq/data/*.msgpack.xz from it
+python build/export_tsv.py       # writes release/ro_surface.tsv.gz from it
 ```

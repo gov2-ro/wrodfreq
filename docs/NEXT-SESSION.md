@@ -23,11 +23,13 @@ first to reorient, then follow the links.
   rows", "Re-validate the hyphen decisions"). 46 sampled rows still need the owner's policy.
 - **M7 exists** (`~/devbox/otios/validate_with_wrodfreq.py`, wROdfreq as an editable
   dependency there) but its text still says five sources; re-run it against 0.2.0.
-- **What stands between here and a release:** the DEX answer; a `LICENSE` file and the
-  data-licence wording (Reddit and OpenSubtitles have no formal redistribution licence —
-  only counts are shipped); `data/wrodfreq.db` is 4.09 GB against GitHub's 2 GiB per-asset
-  cap uncompressed (1.25 GiB with zstd; a 137 MiB light version is possible) — see
-  `docs/release-data-hosting.md`; choose PyPI trusted publishing or manual upload.
+- **What stands between here and a release:** the DEX answer; the risk that the
+  licences do not settle (code EUPL 1.2, data CC BY-SA 4.0; Reddit and OpenSubtitles have no
+  formal redistribution licence — only counts are shipped); choose the data repository for the 4.09 GB `data/wrodfreq.db`
+  (not GitHub, decided 2026-11-06; spec §10.2, `docs/release-data-hosting.md`); commit
+  `release/ro_surface.tsv.gz` after the review, and remove `release/` from `.gitignore`
+  and the Google Drive link from the README; choose
+  PyPI trusted publishing or manual upload.
 
 ## How work is organised now
 

@@ -143,6 +143,7 @@ python build/merge.py             # trimmed mean → merged
 python build/build_lemma_layer.py # needs inflected_forms.db; optional
 python build/build_package.py     # → wrodfreq/data/ro_{surface,by_source,lemma}.msgpack.xz
                                   #   (rows with 3+ hyphens are left out of the package, not the db)
+python build/export_tsv.py        # → release/ro_surface.tsv.gz, the same rows as the package
 python build/validate.py          # must run in CI and fail the build
 ```
 
@@ -197,7 +198,9 @@ session, or asks Opus to start a Sonnet agent on it.
 ## Repo conventions
 
 - No `.db` or `.csv` in git, ever. `data/wrodfreq.db` and `data/checkpoints/` are
-  gitignored; large artifacts ship as GitHub release assets, not in the wheel.
+  gitignored. The one data table in git is `release/ro_surface.tsv.gz`; commit a new
+  version only for a release. The full database goes to a data repository, not GitHub
+  (spec §10.2).
 - Package name is `wrodfreq` on PyPI, styled `wROdfreq` in prose.
 - `MINOR` version changes when the corpus panel changes; `build_info()` exposes the panel
   so a paper can cite an exact build.

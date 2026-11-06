@@ -475,7 +475,28 @@ Target < 30 MB for the surface table so the wheel stays installable.
 Round Zipf to 2 decimals in the shipped file. The third decimal is noise and it costs
 real bytes across ~2M entries.
 
-Ship the full `wrodfreq.db` as a **GitHub release asset**, not in the wheel.
+The project offers its data at three levels (amended 2026-11-06; the measurements are in
+`docs/release-data-hosting.md`):
+
+| Level | For whom | File | Where | Size (0.2.0) |
+|---|---|---|---|---|
+| Package data | Python users | `wrodfreq/data/*.msgpack.xz` | the wheel | 39.7 MB |
+| Final table | Readers who do not use Python | `release/ro_surface.tsv.gz` | **in this repository** | 34.1 MiB |
+| Full database | Researchers who check or rerun the method | `data/wrodfreq.db` | **a data repository, not GitHub** (not chosen yet) | 4.09 GB |
+
+**Final table.** `build/export_tsv.py` writes the file. It has the columns `word`, `zipf`,
+`n_reliable`, `n_attesting` and `spread`. It holds the same rows and rounded values as
+`ro_surface.msgpack.xz`, with the most frequent words first. The rebuild is byte-identical.
+The file is gzipped because the plain TSV is 155 MB, and GitHub rejects a file over 100 MB.
+Commit a new version only for a release, because each version stays in the git history.
+During the review, the owner shares the file from Google Drive and the README links to it. The
+file stays out of git until the review ends. `.gitignore` holds `release/` until then.
+
+**Licences.** The code is under EUPL 1.2. The data is under CC BY-SA 4.0.
+
+**Full database.** The project will offer this file to the world, but not on GitHub. It is
+not in the repository and not in the wheel. The owner has not chosen the data repository.
+`is_dex` stays out of any public copy until DEX Online answers.
 
 ### 10.3 Versioning
 
@@ -565,7 +586,10 @@ wrodfreq/
 │   ├── merge.py
 │   ├── build_lemma_layer.py
 │   ├── build_package.py
+│   ├── export_tsv.py          # the final table for readers (§10.2)
 │   └── validate.py
+├── release/
+│   └── ro_surface.tsv.gz      # in git; a new version only for a release
 ├── tools/dex_extractor/
 │   └── extract_inflected_forms.py   # from oțios, for provenance (§5)
 ├── tests/
@@ -579,7 +603,7 @@ wrodfreq/
 ```
 
 `data/wrodfreq.db` and `data/checkpoints/` are gitignored. Follow oțios's convention: no
-`.db` or `.csv` in git, ever, with a release asset instead.
+`.db` or `.csv` in git, ever. The one data table in git is `release/ro_surface.tsv.gz` (§10.2).
 
 ---
 
@@ -608,8 +632,8 @@ check 4 passes.
 *Done when:* `lemma_frequency('înmărmuri')` substantially exceeds
 `zipf_frequency('înmărmuri')`, and `family_ratio` for `tinereță` is ~300.
 
-**M6 — publish.** PyPI, GitHub release with `wrodfreq.db` and `inflected_forms.db`,
-`docs/method.md`.
+**M6 — publish.** PyPI, the final table in the repository and the full database in a data
+repository (§10.2), `docs/method.md`.
 
 **M7 — feed it back.** Expose `n_reliable` to oțios as a corroboration signal. That is a
 change in the oțios repo, not this one, and it is the only coupling between the two.

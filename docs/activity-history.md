@@ -1388,3 +1388,23 @@ ADR-003 records the band that `build/validate.py` already applied. The spec, `CL
 `docs/method.md` and both pipeline figures now state 6.0–8.0. `validate.py` changes only in
 its comment, docstring and printed label; the check does not change. The README no longer
 has the ASCII schematic, because the figure replaces it.
+
+## 2026-11-06 — Final table as a TSV in the repository; full database leaves GitHub
+
+The owner decided how users get the data, and spec §10.2 now records it. `build/export_tsv.py`
+writes `release/ro_surface.tsv.gz`: 6,041,542 rows, 34.1 MiB, and 155 MB unpacked. The plain
+TSV is over GitHub's 100 MB file limit, so the file is gzipped. A sample of 20,000 words matches
+`frequency_detail()` with no mismatch. The TSV replaces the proposed light database.
+
+The full 4.09 GB database goes to a data repository, not GitHub; the owner has not chosen the
+data repository. The README now states that the database exists. The TSV is not committed yet,
+because the repository is public and the licence wording does not exist.
+
+## 2026-11-07 — Licences chosen; TSV shared for review outside git
+
+The owner added `LICENSE.txt` (EUPL 1.2) and chose CC BY-SA 4.0 for the data. The README and
+`pyproject.toml` now state both. The licences do not settle the Reddit and OpenSubtitles question.
+
+The TSV stays out of git during the review, because the review can change the rows and each
+committed version adds about 34 MiB to the history. The owner shares it from Google Drive, and
+`.gitignore` holds `release/` until the review ends.

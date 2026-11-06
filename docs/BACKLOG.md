@@ -1018,8 +1018,8 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   is that `inflected_forms.db` is DEX-derived with unresolved terms. Not a free fix:
   coverage drops from 2,269,003 forms to 428k, the resource is weakest on modern vocabulary
   where open vocabulary is the point, and share-alike may bind the shipped data file —
-  which cannot even be assessed yet, because **this project has no `LICENSE` file and no
-  `license` field in `pyproject.toml`**. That is a prerequisite.
+  which can now be assessed: since 2026-11-07 the code is under EUPL 1.2 and the data is under
+  CC BY-SA 4.0 (README, `pyproject.toml`).
 
   One thing to raise with the author: LexicRo is built on DEXonline and RoLEX but states
   licensing only for MULTEXT-East and UD RRT, so its author has already met this project's
@@ -1126,14 +1126,17 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   the junk share per stratum moved? do the open `?` classes (46 rows in 2026) now have a policy? is the
   joined-twin rule still ≥85% right? Record the outcome in this file and `docs/activity-history.md`.
 
-- [ ] **Decide where the data lives, and build the release export — see
-  `docs/release-data-hosting.md` (2026-10-05).** `wrodfreq.db` is 4.09 GB, over GitHub's
-  2 GiB per-asset cap uncompressed, but 1.25 GiB with `zstd -6`; a light database (reliable
-  per-source Zipf only, no raw counts) is 137 MiB compressed. The doc has the measurements, the
-  proposed `build/export_release.py`, and four decisions for the owner: Zenodo vs Hugging Face
-  for the full counts, whether to publish the light database, whether `documents` stays public,
-  and whether the lemma table ships before DEX answers. Keep `is_dex` out of any public database
-  until then. Related release blockers still open: a `LICENSE` file, the data-licence wording
-  (Reddit and OpenSubtitles have no formal redistribution licence; only counts ship), and the
-  PyPI route (trusted publishing or manual).
+- [ ] **Choose the data repository for the full database, and build its export — see
+  `docs/release-data-hosting.md` and spec §10.2.** Decided 2026-11-06: `wrodfreq.db` (4.09 GB)
+  goes to a data repository, not GitHub; there is no light database;
+  `release/ro_surface.tsv.gz` replaces it. Still open for the owner: which data repository,
+  whether `documents` stays public, and whether the lemma table ships before DEX answers. Keep
+  `is_dex` out of any public database until then.
+
+- [ ] **Commit the TSV after the review.** The owner shares `release/ro_surface.tsv.gz` from
+  Google Drive during the review, because the review can change the rows. Then rebuild the file
+  if needed, remove `release/` from `.gitignore`, commit the file, and replace the Drive link
+  and the SHA-256 in the README. Related release blockers still open: the risk that the licences
+  do not settle (Reddit and OpenSubtitles have no formal redistribution licence; only counts
+  ship), and the PyPI route (trusted publishing or manual).
 
