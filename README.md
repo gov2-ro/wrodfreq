@@ -130,7 +130,7 @@ confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (R
 | You want | Use | Size |
 |---|---|---|
 | Lookups from Python | `pip install wrodfreq` (not published yet) | 39.7 MB of data |
-| The final table, without Python | `ro_surface.tsv.gz` — review copy: LINK-TO-BE-ADDED | 34.1 MiB (155 MB unpacked) |
+| The final table, without Python | `ro_surface.tsv.gz` — review copy: [ro_surface.tsv.gz](https://drive.google.com/file/d/1tpQJeOE_qxsYJDJtvyylNozhygm4T8vA/view?usp=drive_link) | 34.1 MiB (155 MB unpacked) |
 | The raw counts per source, to check or rerun the method | `wrodfreq.db`, the full database | 4.09 GB |
 
 The TSV holds one row per word, with the most frequent words first. Its columns are `word`,
@@ -151,6 +151,8 @@ We intend to publish it in a data repository, not on GitHub. We have not chosen 
 repository yet.
 
 ## Licence
+
+Copyright © gov2. The licences below come from gov2.
 
 - **Code:** licensed under the [EUPL 1.2](LICENSE.txt).
 - **Data** (the TSV and the files in `wrodfreq/data/`): licensed under
