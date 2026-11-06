@@ -1371,3 +1371,20 @@ stage. Compared with `wordfreq` (wheel 54.2 MiB for all languages; raw counts ne
 Flagged that a public `is_dex` column or lemma table leaks DEX's headword list, so both wait on the
 DEX answer. Written up in `docs/release-data-hosting.md` with four decisions for the owner; backlog
 item added; NEXT-SESSION's release-blockers bullet now points to it.
+
+## 2026-11-06 — Pipeline diagram added to the README and the method
+
+The `diagram-designer` agent drew the build pipeline in two variants with the same layout:
+`docs/figures/pipeline-en.{svg,png}` and `docs/figures/pipeline-ro.{svg,png}`. The SVG is
+the source and the PNG is the file that the documents show. `README.md` (Schematic
+overview) shows the English PNG, and `docs/method.md` (§3) shows the Romanian PNG.
+
+The figures contain numbers from build 0.2.0: corpus sizes, row counts and lemma counts.
+Change the SVG and render the PNG again when these numbers change.
+
+## 2026-11-06 — Function-word band documented as 6.0–8.0; ASCII schematic removed
+
+ADR-003 records the band that `build/validate.py` already applied. The spec, `CLAUDE.md`,
+`docs/method.md` and both pipeline figures now state 6.0–8.0. `validate.py` changes only in
+its comment, docstring and printed label; the check does not change. The README no longer
+has the ASCII schematic, because the figure replaces it.

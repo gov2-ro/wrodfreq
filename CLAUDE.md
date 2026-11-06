@@ -155,7 +155,7 @@ locally before tagging.
 ## Validation is the gate
 
 `validate.py` must fail the build. The one check that catches the worst bug in the spec:
-**function words land in Zipf 6.0–7.5** (`de`, `și`, `la`, `un`, `cu`) — if they do not,
+**function words land in Zipf 6.0–8.0** (`de`, `și`, `la`, `un`, `cu`; ADR-003) — if they do not,
 the denominator is wrong. Then: **conditional pairwise concordance ≥ 0.93** against
 `wordfreq`'s Romanian where it separates two words by ≥0.3 Zipf (Spearman ρ is printed but
 no longer gated — it scores `wordfreq`'s own ties; spec §11.2); ~60 hand-written monotone

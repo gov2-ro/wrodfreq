@@ -41,6 +41,10 @@ Scara este aceeași ca la proiectul `wordfreq`, așa că numerele se pot compara
 Fiecare pas este un script separat din `build/`. Oricare poate fi rulat din nou oricând,
 iar rezultatul este identic, bit cu bit.
 
+![Etapele de construcție ale wROdfreq. Șase corpusuri deschise sunt numărate separat în source_counts și sources. compute_zipf.py scrie source_zipf, tot pe sursă. merge.py obține tabela merged fără să înlocuiască tabelele surselor. O ramură opțională, build_lemma_layer.py, folosește harta DEX și scrie tabela separată lemma_zipf. build_package.py scrie trei fișiere de date pentru pachetul pip wrodfreq. validate.py rulează ultimul, citește tabelele și două intrări de referință și oprește construcția dacă o verificare pică. Baza de date SQLite brută este a doua ieșire.](figures/pipeline-ro.png)
+
+`diagram-designer` agent by [iello](https://github.com/iello/)
+
 ### Pasul 1 — Împărțim textul în cuvinte (tokenizare)
 
 Un singur program, `wrodfreq/tokenizer.py`, face asta pentru toate sursele. Dacă două
@@ -182,7 +186,7 @@ poate desface, așa că nu amestecăm cele două.
 nu e în regulă:
 
 1. **Cuvintele-unealtă sunt sus.** `de`, `și`, `la`, `un`, `cu` trebuie să aibă Zipf între
-   6,0 și 7,5. Dacă nu, numitorul e greșit. Este cea mai importantă verificare. Acum:
+   6,0 și 8,0. Dacă nu, numitorul e greșit. Este cea mai importantă verificare. Acum:
    `de` 7,68, `și` 7,34, `la` 7,23, `un` 6,94, `cu` 7,08.
 2. **Acord cu `wordfreq`.** Luăm perechile de cuvinte pe care `wordfreq` le vede clar
    diferite (cel puțin 0,3 pe scara Zipf) și verificăm că le ordonăm la fel. Cerința:

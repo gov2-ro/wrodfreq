@@ -165,28 +165,9 @@ corpora agree — and for a rare word, agreement is the more useful number.**
 
 ## Schematic overview
 
-```
-6 open corpora (web, news, subs, social, wiki, eu — 28.8B tokens)
-        │
-        ▼
- ingest_<source>.py    per-source token counts — checkpointed, resumable
-        │
-        ▼
- compute_zipf.py       per-source Zipf + `reliable` flag (abstains below MIN_OCC_PER_SOURCE)
-        │
-        ▼
- merge.py              trimmed mean across sources — a derived view, never merged in place
-        │
-        ├──────────────► build_lemma_layer.py   per-lemma rollup via DEX paradigm map
-        ▼
- build_package.py      wrodfreq/data/ro_surface.msgpack.xz  (the pip package payload)
-        │
-        ▼
- validate.py           CI gate — function words must land in Zipf 6.0–7.5, ρ > 0.9 vs wordfreq, ...
-        │
-        ▼
- zipf_frequency('cuvânt')     ← drop-in wordfreq API, plus frequency_detail / lemma_frequency / by_source
-```
+![Build pipeline of wROdfreq. Six open corpora are counted separately into source_counts and sources. compute_zipf.py writes source_zipf, still per source. merge.py derives the merged table without overwriting the source tables. An optional side branch, build_lemma_layer.py, uses the DEX map to write the separate lemma_zipf table. build_package.py writes three data files for the pip package wrodfreq. validate.py runs last, reads the tables and two reference inputs, and fails the build when a check fails. The raw SQLite database is a second output.](docs/figures/pipeline-en.png)
+
+`diagram-designer` agent by [iello](https://github.com/iello/)
 
 Two SQLite tables underpin all of this: per-source surface-form counts (raw) and a
 separate lemma rollup (derived) — you can roll counts up, you cannot un-roll them. The

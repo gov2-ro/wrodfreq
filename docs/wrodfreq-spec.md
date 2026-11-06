@@ -497,7 +497,7 @@ makes that possible.
 `validate.py` must fail the build. Six checks:
 
 1. **Function words land where they should.** `de`, `și`, `la`, `un`, `cu` must fall in
-   Zipf 6.0–7.5. If they do not, the denominator is wrong (§3.2). **This check alone
+   Zipf 6.0–8.0 (ADR-003). If they do not, the denominator is wrong (§3.2). **This check alone
    catches the worst bug in this spec.**
 2. **Agreement with `wordfreq`'s Romanian list**, over the words it covers (Zipf ≥ 3),
    scored as **pairwise concordance ≥ 0.93 over the pairs wordfreq itself separates by
@@ -589,7 +589,7 @@ Sequenced so something is usable early and each milestone is independently verif
 
 **M1 — skeleton and tokenizer.** `tokenizer.py`, schema, `compute_zipf.py`,
 `validate.py` checks 1 and 6. Ingest **Wikipedia RO only** (~80M tokens, hours not days).
-*Done when:* `zipf_frequency('de')` is in 6.0–7.5 from one source. This proves the
+*Done when:* `zipf_frequency('de')` is in 6.0–8.0 from one source (ADR-003). This proves the
 denominator (§3.2) before any long job runs.
 
 **M2 — the backbone.** `ingest_web.py` over CulturaX, with checkpointing lifted from

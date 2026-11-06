@@ -3,7 +3,7 @@
 
 All six spec checks:
 
-  1. Function words land in Zipf 6.0-7.5 (adjusted ceiling, see below) — the
+  1. Function words land in Zipf 6.0-8.0 (ADR-003, see below) — the
      check that catches a broken denominator (spec §3.2). Runs against
      `merged` once it exists, per-source `source_zipf` before that.
   2. Agreement with `wordfreq`'s Romanian list, over words it covers at
@@ -52,7 +52,7 @@ from build_package import build_payloads
 FUNCTION_WORDS = ["de", "și", "la", "un", "cu"]
 ZIPF_LOW, ZIPF_HIGH = 6.0, 7.5
 
-# spec §11.1's literal band is 6.0-7.5, but the *correctly computed* value for
+# spec §11.1's original band was 6.0-7.5 (amended by ADR-003), but the *correctly computed* value for
 # "de" overshoots it at both the single-source level (M1, 2026-08-18) and now
 # in the proper 5-source trimmed mean too (`merged`'s de = 7.71, M4,
 # 2026-09-08) — and both track `wordfreq`'s own real Romanian value (7.72)
@@ -159,7 +159,7 @@ def _fetch_merged_zipf(conn: sqlite3.Connection, words: list[str]) -> dict[str, 
 
 def check_function_words(conn: sqlite3.Connection) -> bool:
     """Check 1: de, și, la, un, cu must fall in Zipf 6.0-ZIPF_HIGH_ADJUSTED."""
-    print("[1] function words in Zipf 6.0-7.5 (adjusted ceiling, see ZIPF_HIGH_ADJUSTED)")
+    print(f"[1] function words in Zipf {ZIPF_LOW}-{ZIPF_HIGH_ADJUSTED} (ADR-003)")
 
     (merged_count,) = conn.execute("SELECT COUNT(*) FROM merged").fetchone()
     if merged_count:
