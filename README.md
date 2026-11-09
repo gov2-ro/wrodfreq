@@ -82,14 +82,15 @@ merge is always computed from the raw counts, never stored in place over them.
 
 ---
 
-> **Status: 0.2.1 built, verified and promoted locally (2026-11-09); not yet published.**
+> **Status: 0.2.1 released on GitHub (tag `v0.2.1`) and Google Drive; PyPI waits for an
+> external review.**
 > A 2026-11-09 audit found two data defects in build 0.2.0: the `social` counts held a
 > test run twice (30,155,307 extra tokens), and 2,382 lemmas had `family_ratio` below 1.
 > The pipeline was repaired (ADR-004 to ADR-006), `social` was recounted from its raw
 > dumps, and build `9550cd80441597586fa1a74eaf9069b2` passes the strict, read-only
 > validation 8/8 and an independent byte-identical rebuild: 6,039,510 shipped words,
-> 180,565 lemmas. **Not yet published to PyPI** — build the wheel yourself for now (see
-> below).
+> 180,565 lemmas. **Not yet on PyPI** — install the wheel from the release bundle, or build
+> it yourself (see below).
 
 ## Usage
 
@@ -133,22 +134,22 @@ confirmed (see `docs/BACKLOG.md`). Method: [`docs/method.md`](docs/method.md) (R
 |---|---|---|
 | Lookups from Python | `pip install wrodfreq` (not published yet) | 39.7 MB of data |
 | The final table, without Python | `ro_surface.tsv.gz` — review copy: [ro_surface.tsv.gz](https://drive.google.com/file/d/1tpQJeOE_qxsYJDJtvyylNozhygm4T8vA/view?usp=drive_link) | 34.1 MiB (155 MB unpacked) |
+| The wheel and sdist, before PyPI | release bundle `v0.2.1` (wheel, sdist, data, validation report): [bundle](https://drive.google.com/file/d/17OHwq_gmt8cKKcS4K9XtOcu0LlRLr7mB/view?usp=drive_link), SHA-256 `5223adf922d3220c2eed865003d531a17e067ecf704b04b9edad39df0a1838d2` | 148 MiB |
 | The raw counts per source, to check or rerun the method | `wrodfreq.db`, the full database | 4.09 GB |
 
 The TSV holds one row per word, with the most frequent words first. Its columns are `word`,
 `zipf`, `n_reliable`, `n_attesting` and `spread`. It has the same rows and values as the
 package.
 
-The TSV is a **review copy of build 0.2.0** and can change. It moves into this repository
-after the review. SHA-256 (of the 0.2.0 file only):
-`06f85c941e0ce8f3ef8cf9b5f04b6dc37cedb9b2c12faa75463eea66b8502fc3`.
-**This copy has the two 0.2.0 defects described above.** The corrected 0.2.1 TSV
-(build `9550cd80441597586fa1a74eaf9069b2`) has SHA-256
-`8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62`; it replaces the Drive
-copy once it is uploaded (`docs/release-runbook.md`).
+The TSV is a **review copy of build 0.2.1** (`9550cd80441597586fa1a74eaf9069b2`) and can
+change. It moves into this repository after the review. SHA-256:
+`8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62`.
+It replaced the 0.2.0 file at the same link on 2026-11-10. If you downloaded the TSV before
+that date, its SHA-256 is `06f85c94…02fc3` and it has the two 0.2.0 defects described above;
+download it again.
 
-Of the 6,041,542 words, 4,838,839 (80%) are reliable in only one source. For a cleaner list,
-keep the rows with `n_reliable >= 2` (1,202,703 words).
+Of the 6,039,510 words, 4,841,884 (80%) are reliable in only one source. For a cleaner list,
+keep the rows with `n_reliable >= 2` (1,197,626 words).
 
 **The full database exists, but it is not in this repository.** It is the output of the
 build pipeline. It holds the raw counts for each source, including the words below the
@@ -172,7 +173,7 @@ Copyright © gov2. The licences below come from gov2.
 
 ## What it's for
 
-The distinctive assets are the ones worth building on: **6,041,542 words** rather than
+The distinctive assets are the ones worth building on: **6,039,510 words** rather than
 `wordfreq`'s "small" list, a floor far below Zipf 3.0, per-source retention
 (`n_reliable` / `n_attesting` / `spread` / `by_source`), six registers with period tags,
 and a lemma layer kept separate from surface forms.

@@ -24,12 +24,14 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   promoted into `data/wrodfreq.db`, `wrodfreq/data/` and `release/`. Rollback copies in
   `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/`.
 
-- [ ] **Publish the 0.2.1 review TSV and merge the branch.** Upload
-  `release/ro_surface.tsv.gz` (SHA-256 `8bb1592e…ca62`) to Drive, update the README link
-  and say the 0.2.0 file is superseded; merge and push `b7-pipeline-repair`. For a PyPI
-  release, the bundle (SHA-256 `5223adf9…38d2`) is on Drive and recorded in
-  `.github/release-candidate.json`;
-  and run the release workflow (`docs/release-runbook.md` §4).
+- [x] **Publish the 0.2.1 review TSV and merge the branch.** Done 2026-11-10: the owner
+  replaced the Drive TSV in place (same link, SHA-256 `8bb1592e…ca62` verified by
+  download); the README says the 0.2.0 file was superseded. Branch merged and pushed;
+  tag `v0.2.1` pushed; the release check passed on the Drive bundle.
+
+- [ ] **PyPI upload — after an external review.** The owner wants an outside review
+  first; until then 0.2.1 lives on GitHub (tag `v0.2.1`) and Google Drive only. The wheel
+  and sdist are in the bundle (`.github/release-candidate.json`).
 
 - [ ] **`top_n_list` takes `n` first, unlike `wordfreq`'s `top_n_list(lang, n)`.** Found
   2026-11-09 while writing the install probe: `wrodfreq.top_n_list("ro", 5)` raises a
