@@ -108,7 +108,7 @@ code identity is part of it.
 
 | What | Value |
 |---|---|
-| Staging directory | `data/staging/2026-11-09-b7/` (gitignored) |
+| Generation (kept) | `data/builds/9550cd80441597586fa1a74eaf9069b2/` (gitignored); reports in `data/builds/9550cd80441597586fa1a74eaf9069b2-reports/`. The staging folder was deleted 2026-11-10 after promotion. |
 | Build id | `9550cd80441597586fa1a74eaf9069b2` (0.2.1, data format 2, build date 2026-11-09) |
 | Manifest | `inputs-final.json`, code revision `7d4d6128759efc621ca122509d44661fa91c7dbf` |
 | Database (now `data/wrodfreq.db`) | SHA-256 `ef468da19885c9f45b973639d0418a2245aa93075bd952da6ce0ef2f9cdc93b8` |
@@ -116,11 +116,12 @@ code identity is part of it.
 | `ro_by_source.msgpack.xz` | `a278d9fb3a572685ab93d70592c548c179272dcd499ac03a0371090bddc1d9b1` (9,999,328 B) |
 | `ro_lemma.msgpack.xz` | `7b446842bdef5380b7e2636316221fc76d29eadc14737275333eb98b83138e6d` (1,107,152 B) |
 | `ro_surface.tsv.gz` (now `release/`) | `8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62` (35,763,094 B) |
-| Bundle tarball | `bundle-final.tar.gz`, SHA-256 `5223adf922d3220c2eed865003d531a17e067ecf704b04b9edad39df0a1838d2` |
+| Bundle tarball | SHA-256 `5223adf922d3220c2eed865003d531a17e067ecf704b04b9edad39df0a1838d2`, hosted at https://drive.usercontent.google.com/download?id=17OHwq_gmt8cKKcS4K9XtOcu0LlRLr7mB&export=download&confirm=t (direct download; verified 2026-11-10). Recorded in `.github/release-candidate.json`. |
 | Strict validation | `validation-final.json`: 8/8, `release_eligible: true` |
 | Independent rebuild | `rebuild-final.json`: same build id, files and tables identical |
 | Release preflight | `check_release.py --install-test`: passed |
 | Rollback copies | `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/` (0.2.0 db `f990c483…`, blobs, TSV `06f85c94…`, `hashes.txt`) |
 
-Still to do by hand: upload the 0.2.1 TSV to Drive and update the README link; host
-`bundle-final.tar.gz` and run the release workflow when you want to publish.
+Still to do by hand: upload the 0.2.1 TSV to Drive and update the README link.
+A Google Drive "view" link returns a web page, not the file; the release workflow needs
+the `drive.usercontent.google.com/download?id=…&export=download&confirm=t` form.

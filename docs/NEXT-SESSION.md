@@ -20,7 +20,7 @@ Details: `docs/activity-history.md` (2026-11-09), `docs/release-runbook.md` §5.
 - **Rollback:** `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/`
   (runbook §3). Going back to 0.2.0 data also needs the 0.2.0 code.
 - **Still to do by hand:** merge/push `b7-pipeline-repair`; upload the 0.2.1 TSV
-  (`8bb1592e…`) to Drive and update the README link; host `bundle-final.tar.gz` and run
+  (`8bb1592e…`) to Drive and update the README link; the bundle is on Drive (`.github/release-candidate.json`); run
   the release workflow when publishing. The Drive copy is still 0.2.0 and the README
   says it has both defects.
 - **Do not** run a stage against `data/wrodfreq.db` to inspect it. `build/integrity.py`

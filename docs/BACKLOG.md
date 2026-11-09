@@ -27,7 +27,8 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
 - [ ] **Publish the 0.2.1 review TSV and merge the branch.** Upload
   `release/ro_surface.tsv.gz` (SHA-256 `8bb1592e…ca62`) to Drive, update the README link
   and say the 0.2.0 file is superseded; merge and push `b7-pipeline-repair`. For a PyPI
-  release, host `data/staging/2026-11-09-b7/bundle-final.tar.gz` (SHA-256 `5223adf9…38d2`)
+  release, the bundle (SHA-256 `5223adf9…38d2`) is on Drive and recorded in
+  `.github/release-candidate.json`;
   and run the release workflow (`docs/release-runbook.md` §4).
 
 - [ ] **`top_n_list` takes `n` first, unlike `wordfreq`'s `top_n_list(lang, n)`.** Found
