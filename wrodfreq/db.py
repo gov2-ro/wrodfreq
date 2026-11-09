@@ -12,6 +12,7 @@ satisfy the narrative requirement — see docs/activity-history.md.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from pathlib import Path
 
 DEFAULT_DB_PATH = Path("data/wrodfreq.db")
@@ -71,17 +72,73 @@ CREATE TABLE IF NOT EXISTS lemma_zipf (
   zipf            REAL NOT NULL,
   n_forms         INTEGER NOT NULL,
   zipf_headword   REAL,                -- the citation form alone, for comparison
-  family_ratio    REAL                 -- undivided family total / disambiguated total
+  family_ratio    REAL                 -- loose / disambiguated, same source panel (ADR-005)
+) WITHOUT ROWID;
+
+-- the identity of this database file (ADR-004)
+CREATE TABLE IF NOT EXISTS db_meta (
+  key            TEXT PRIMARY KEY,
+  value          TEXT NOT NULL
+);
+
+-- authoritative ingest progress, committed with the counts it describes (ADR-004)
+CREATE TABLE IF NOT EXISTS ingest_state (
+  source_id      TEXT PRIMARY KEY,
+  state_version  INTEGER NOT NULL,
+  generation     TEXT NOT NULL,        -- one id per fresh ingest or legacy adoption
+  seq            INTEGER NOT NULL,     -- +1 for every transaction that changes counts
+  state          TEXT NOT NULL,        -- in_progress | completed | sealed_legacy
+  cursor_version INTEGER NOT NULL,
+  cursor         TEXT NOT NULL,        -- source-specific JSON position
+  policy_hash    TEXT NOT NULL,        -- tokenizer + source policy, or 'unknown-legacy'
+  input_manifest TEXT NOT NULL,        -- canonical JSON of the raw inputs
+  input_hash     TEXT NOT NULL,
+  upstream       TEXT NOT NULL,        -- JSON; known snapshot/revision, or unknown
+  db_id          TEXT NOT NULL,        -- db_meta.db_id of the database this state belongs to
+  provenance     TEXT NOT NULL DEFAULT '{}',
+  started_at     TEXT,
+  updated_at     TEXT
+);
+
+-- what each derived stage was computed from (ADR-006)
+CREATE TABLE IF NOT EXISTS stage_state (
+  stage          TEXT PRIMARY KEY,     -- 'zipf:<source_id>' | 'merge' | 'lemma'
+  run_id         TEXT NOT NULL,        -- hash of `inputs`
+  inputs         TEXT NOT NULL         -- canonical JSON
 ) WITHOUT ROWID;
 """
 
 
 def connect(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    """Open (creating if needed) the wROdfreq SQLite database with schema applied."""
+    """Open (creating if needed) the wROdfreq SQLite database with schema applied.
+
+    This writes: it applies the schema and gives the file an identity. Use
+    `connect_readonly()` to inspect a database.
+    """
+    db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=60)
     conn.executescript(SCHEMA_SQL)
+    conn.execute("INSERT OR IGNORE INTO db_meta (key, value) VALUES ('db_id', ?)",
+                 (uuid.uuid4().hex,))
+    conn.commit()
     return conn
+
+
+def connect_readonly(db_path: Path) -> sqlite3.Connection:
+    """Open an existing database read-only. Creates nothing; fails if it is absent."""
+    db_path = Path(db_path)
+    if not db_path.is_file():
+        raise FileNotFoundError(f"database not found: {db_path}")
+    return sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True)
+
+
+def db_id(conn: sqlite3.Connection) -> str | None:
+    try:
+        row = conn.execute("SELECT value FROM db_meta WHERE key = 'db_id'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row else None
 
 
 # Shared by build/merge.py and build/build_lemma_layer.py, whose lemma-level

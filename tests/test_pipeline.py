@@ -91,6 +91,11 @@ def db(tmp_path: Path) -> sqlite3.Connection:
         [(w, s, occ, max(1, occ // 10))
          for w, per_src in COUNTS.items() for s, occ in per_src.items()],
     )
+    # Stage 2 refuses non-conserving counts (brief B7): one filler word per source
+    # carries the rest of its tokens, so SUM(occurrences) == total_tokens.
+    for src in SOURCES:
+        rest = TOTALS[src] - sum(per_src.get(src, 0) for per_src in COUNTS.values())
+        conn.execute("INSERT INTO source_counts VALUES ('restul', ?, ?, 1000)", (src, rest))
     conn.commit()
     return conn
 
@@ -100,6 +105,14 @@ def _hash_query(conn: sqlite3.Connection, sql: str) -> str:
     for row in conn.execute(sql):
         h.update(repr(row).encode())
     return h.hexdigest()
+
+
+def _manifest(conn: sqlite3.Connection, lemma: bool = False) -> dict:
+    """The parts of a build-input manifest that stage 5's payload builders read."""
+    panel = eligible_sources(conn)
+    return {"build_id": "fixture", "build_date": "2026-01-01", "package_version": "0",
+            "panel": panel, "lemma": lemma,
+            "sources": [{"source_id": s, "total_tokens": TOTALS[s]} for s in panel]}
 
 
 def _build_all(conn: sqlite3.Connection) -> None:
@@ -128,8 +141,8 @@ def test_merge_is_idempotent(db):
 
 def test_package_payload_is_idempotent(db):
     _build_all(db)
-    a = build_package.build_payloads(db)
-    b = build_package.build_payloads(db)
+    a = build_package.build_payloads(db, _manifest(db))
+    b = build_package.build_payloads(db, _manifest(db))
     assert json.dumps(a, sort_keys=True, default=str) == json.dumps(b, sort_keys=True, default=str)
 
 
@@ -222,13 +235,13 @@ def test_merge_never_weights_by_source_size(db):
 
 def test_lemma_payload_is_absent_without_a_lemma_layer(db):
     _build_all(db)
-    assert build_package.build_lemma_payload(db) is None
+    assert build_package.build_lemma_payload(db, _manifest(db, lemma=False)) is None
 
 
 def test_lemma_payload_packs_missing_values_as_minus_one(db):
     _build_all(db)
     db.execute("INSERT INTO lemma_zipf VALUES ('a', 2.0, 3, 1.5, 4.0), ('b', 1.0, 1, NULL, NULL)")
-    p = build_package.build_lemma_payload(db)
+    p = build_package.build_lemma_payload(db, _manifest(db, lemma=True))
     assert p["lemmas"] == ["a", "b"] and p["zipf"] == [200, 100]
     assert p["zipf_headword"] == [150, -1] and p["family_ratio"] == [400, -1]
 
@@ -239,7 +252,7 @@ def test_package_leaves_out_rows_with_three_or_more_hyphens(db):
     db.execute("INSERT INTO merged (word, zipf, n_reliable, n_attesting, n_sources, spread) "
                "VALUES ('cluj-napoca', 3.0, 1, 1, 5, 0), ('a-b-c', 2.0, 1, 1, 5, 0), "
                "('a-b-c-d', 2.0, 1, 1, 5, 0)")
-    words = build_package.build_payloads(db)[0]["words"]
+    words = build_package.build_payloads(db, _manifest(db))[0]["words"]
     assert "cluj-napoca" in words and "a-b-c" in words     # 1 and 2 hyphens stay
     assert "a-b-c-d" not in words                          # 3 hyphens go
     assert db.execute("SELECT 1 FROM merged WHERE word='a-b-c-d'").fetchone() is not None
@@ -261,7 +274,7 @@ def test_tsv_export_matches_package_and_is_byte_identical(db, tmp_path):
     assert len(rows) == count
     assert [float(r[1]) for r in rows] == sorted((float(r[1]) for r in rows), reverse=True)
 
-    surface = build_package.build_payloads(db)[0]
+    surface = build_package.build_payloads(db, _manifest(db))[0]
     assert {r[0] for r in rows} == set(surface["words"])   # the same rows, 3+ hyphens gone
     for r in rows:
         i = surface["words"].index(r[0])

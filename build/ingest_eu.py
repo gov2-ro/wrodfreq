@@ -34,9 +34,9 @@ wrodfreq.tokenizer directly (spec §3).
 
 Usage:
     python build/ingest_eu.py              # full run (minutes)
-    python build/ingest_eu.py --test       # first 20k lines of each part only, no resume
-    python build/ingest_eu.py --limit N    # stop after N lines processed *per part*
-    python build/ingest_eu.py --resume     # pick up from checkpoint
+    python build/ingest_eu.py --test       # first 20k lines of each part, new experiment db
+    python build/ingest_eu.py --limit N    # stop after N lines per part *in this session*
+    python build/ingest_eu.py --resume     # continue the generation stored in the db
 
 Restart loop (stop automatically on success):
     while true; do
@@ -45,31 +45,34 @@ Restart loop (stop automatically on success):
         echo "[$(date)] restarting in 15s..." && sleep 15
     done
 
-Output: data/wrodfreq.db, source_id='eu'. Checkpoint: data/checkpoints/eu_checkpoint.json
+Output: data/wrodfreq.db, source_id='eu'. Progress: `ingest_state` in the same db,
+committed with the counts (ADR-004). Both parts' URLs/versions are resolved once, at
+the fresh start, and pinned as the generation's input manifest.
 Raw downloads cached at: data/raw/europarl_ro.txt.gz, data/raw/dgt_ro.txt.gz
 (gitignored, shared freely between --test and real runs — just cached source
-bytes, not progress; only the *processing* checkpoint is test/real-sensitive).
+bytes, not progress).
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import itertools
 import json
 import os
 import signal
-import sqlite3
 import sys
 import time
 import urllib.request
-from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from ingest_state import Batch, IngestRefused, SourceSpec, begin, target_db
+from wrodfreq.db import connect
 from wrodfreq.tokenizer import tokenize
 
 SOURCE_ID     = "eu"
@@ -88,9 +91,17 @@ PARTS = {
     "dgt":      {"opus_corpus": "DGT",      "raw_file": Path("data/raw/dgt_ro.txt.gz")},
 }
 
-CHECKPOINT    = Path("data/checkpoints/eu_checkpoint.json")
 DOWNLOAD_CHUNK = 1 << 20        # 1 MiB
-COMMIT_EVERY   = 100_000        # lines between DB commits
+COMMIT_EVERY   = 100_000        # lines between commits
+CURSOR_VERSION = 1
+
+SPEC = SourceSpec(
+    source_id=SOURCE_ID, display_name=DISPLAY_NAME, url=URL, licence=LICENCE,
+    register=REGISTER, period=PERIOD, period_note=None,
+    cursor_version=CURSOR_VERSION,
+    policy={"policy_version": 1, "parts": sorted(PARTS), "unit": "line",
+            "decode": "utf-8/replace"},
+)
 
 _shutdown = False
 
@@ -105,7 +116,7 @@ def _handle_signal(sig, frame):
         # process while one is alive. os._exit() terminates at the OS level
         # immediately, unconditionally.
         print(f"\n[{datetime.now()}] second signal {sig} — forcing immediate exit "
-              f"(progress since the last checkpoint is lost)", flush=True)
+              f"(the uncommitted batch is lost and will be re-read)", flush=True)
         os._exit(1)
     print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch "
           f"(press again to force quit immediately, e.g. if stuck mid-download)", flush=True)
@@ -195,160 +206,78 @@ def download_resumable(url: str, dest: Path) -> None:
     print(f"    download complete: {final_size:,} bytes", flush=True)
 
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
-
-def ensure_source_row(conn: sqlite3.Connection, period_note: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO sources (source_id, display_name, url, licence, register,
-                              period, period_note, total_tokens, total_docs, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'in_progress')
-        ON CONFLICT(source_id) DO UPDATE SET period_note = excluded.period_note
-        """,
-        (SOURCE_ID, DISPLAY_NAME, URL, LICENCE, REGISTER, PERIOD, period_note),
-    )
-    conn.commit()
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
-def flush(conn: sqlite3.Connection, word_counts: dict, doc_counts: dict,
-          total_tokens: int, total_docs: int, status: str) -> None:
-    if word_counts:
-        conn.executemany(
-            """
-            INSERT INTO source_counts (word, source_id, occurrences, documents)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(word, source_id) DO UPDATE SET
-                occurrences = occurrences + excluded.occurrences,
-                documents   = documents   + excluded.documents
-            """,
-            [(w, SOURCE_ID, c, doc_counts[w]) for w, c in word_counts.items()],
-        )
-        word_counts.clear()
-        doc_counts.clear()
-    conn.execute(
-        """
-        UPDATE sources SET total_tokens = ?, total_docs = ?, status = ?,
-                            ingested_at = ?
-        WHERE source_id = ?
-        """,
-        (total_tokens, total_docs, status,
-         datetime.now(timezone.utc).isoformat(), SOURCE_ID),
-    )
-    conn.commit()
+def empty_cursor() -> dict:
+    return {"parts": {key: {"lines_done": 0, "tokens_done": 0, "completed": False,
+                            "raw_sha256": None} for key in PARTS}}
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------------------------
-
-def _empty_part_checkpoint() -> dict:
-    return {"download_url": None, "version": None, "lines_done": 0,
-            "tokens_done": 0, "completed": False}
-
-
-def _empty_checkpoint() -> dict:
-    return {"parts": {key: _empty_part_checkpoint() for key in PARTS}}
-
-
-def load_checkpoint() -> dict:
-    cp = _empty_checkpoint()
-    if CHECKPOINT.exists():
-        try:
-            loaded = json.loads(CHECKPOINT.read_text())
-            for key in PARTS:
-                if key in loaded.get("parts", {}):
-                    cp["parts"][key].update(loaded["parts"][key])
-        except (json.JSONDecodeError, ValueError):
-            print("warning: corrupted checkpoint, starting fresh")
-    return cp
-
-
-def save_checkpoint(cp: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp, indent=2))
-    tmp.replace(CHECKPOINT)
+def period_note(manifest: dict) -> str:
+    versions = "; ".join(f"{PARTS[k]['opus_corpus']} {manifest[k]['version']}" for k in PARTS)
+    return (f"Combines OPUS monolingual Romanian exports ({versions}) — "
+            f"Europarl is spoken-then-transcribed parliamentary proceedings, "
+            f"DGT is written EU legal/legislative translation memory; both "
+            f"bureaucratic-formal, folded into one source_id per spec's panel "
+            f"table. `documents` counts source lines/paragraphs, not the "
+            f"document counts OPUS's own metadata reports.")
 
 
 # ---------------------------------------------------------------------------
 # Per-part processing
 # ---------------------------------------------------------------------------
 
-def process_part(key: str, part_cp: dict, raw_file: Path, conn: sqlite3.Connection,
-                  cp: dict, line_limit: int | None) -> bool:
-    """Download (if needed) and ingest one part. Returns True if fully exhausted."""
-    if part_cp["download_url"] is None:
-        print(f"  Resolving {key} download URL via OPUS API...", flush=True)
-        resolved = resolve_download_url(PARTS[key]["opus_corpus"])
-        part_cp["download_url"] = resolved["url"]
-        part_cp["version"] = resolved["version"]
-        save_checkpoint(cp)
-    print(f"  [{key}] {part_cp['download_url']} (version {part_cp['version']})", flush=True)
+def process_part(key: str, batch: Batch, cursor: dict, url: str,
+                 line_limit: int | None) -> str:
+    """Download (if needed) and ingest one part.
 
-    download_resumable(part_cp["download_url"], raw_file)
+    Returns 'done' (part exhausted), 'limit', 'signal' or 'refused'. The caller
+    commits the final batch.
+    """
+    part = cursor["parts"][key]
+    raw_file = PARTS[key]["raw_file"]
+    print(f"  [{key}] {url}", flush=True)
+    download_resumable(url, raw_file)
     if _shutdown:
-        return False
+        return "signal"
+    raw_sha = sha256_file(raw_file)
+    if part["raw_sha256"] not in (None, raw_sha):
+        print(f"refused: {raw_file} changed since this generation began; restore it or "
+              f"rebuild into an empty staged database", file=sys.stderr)
+        return "refused"
+    part["raw_sha256"] = raw_sha
 
-    print(f"  [{key}] processing (skipping first {part_cp['lines_done']:,} "
-          f"already counted)...", flush=True)
-
-    word_counts: dict = defaultdict(int)
-    doc_counts: dict = defaultdict(int)
-    since_flush = 0
+    print(f"  [{key}] processing (skipping first {part['lines_done']:,} already counted)...",
+          flush=True)
     session_lines = 0
-    exhausted = False
-
     with gzip.open(raw_file, "rt", encoding="utf-8", errors="replace") as f:
-        if part_cp["lines_done"]:
-            for _ in itertools.islice(f, part_cp["lines_done"]):
+        if part["lines_done"]:
+            for _ in itertools.islice(f, part["lines_done"]):
                 pass
-
         for line in f:
             if _shutdown:
-                break
-
+                return "signal"
             tokens = tokenize(line)
-            doc_words: set = set()
-            for tok in tokens:
-                word_counts[tok] += 1
-                doc_words.add(tok)
-            for w in doc_words:
-                doc_counts[w] += 1
-
-            part_cp["lines_done"] += 1
-            part_cp["tokens_done"] += len(tokens)
+            batch.add_document(tokens)
+            part["lines_done"] += 1
+            part["tokens_done"] += len(tokens)
             session_lines += 1
-            since_flush += 1
-
             if line_limit is not None and session_lines >= line_limit:
-                break
-
-            if since_flush >= COMMIT_EVERY:
-                _flush_total(conn, cp, word_counts, doc_counts, "in_progress")
-                save_checkpoint(cp)
-                since_flush = 0
-                print(f"    [{key}] {part_cp['lines_done']:,} lines | "
-                      f"{part_cp['tokens_done']:,} tokens", flush=True)
-        else:
-            exhausted = True
-
-    part_cp["completed"] = exhausted and not _shutdown
-    _flush_total(conn, cp, word_counts, doc_counts,
-                 "in_progress")  # overall status decided by caller
-    save_checkpoint(cp)
-    print(f"  [{key}] {'done' if part_cp['completed'] else 'stopped'}: "
-          f"{part_cp['lines_done']:,} lines, {part_cp['tokens_done']:,} tokens",
+                return "limit"
+            if batch.ndocs >= COMMIT_EVERY:
+                batch.commit(cursor)
+                print(f"    [{key}] {part['lines_done']:,} lines | "
+                      f"{part['tokens_done']:,} tokens", flush=True)
+    part["completed"] = True
+    print(f"  [{key}] done: {part['lines_done']:,} lines, {part['tokens_done']:,} tokens",
           flush=True)
-    return part_cp["completed"]
-
-
-def _flush_total(conn: sqlite3.Connection, cp: dict, word_counts: dict,
-                  doc_counts: dict, status: str) -> None:
-    total_tokens = sum(p["tokens_done"] for p in cp["parts"].values())
-    total_lines = sum(p["lines_done"] for p in cp["parts"].values())
-    flush(conn, word_counts, doc_counts, total_tokens, total_lines, status)
+    return "done"
 
 
 # ---------------------------------------------------------------------------
@@ -356,84 +285,67 @@ def _flush_total(conn: sqlite3.Connection, cp: dict, word_counts: dict,
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    global CHECKPOINT
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Ingest Europarl + DGT RO into source_counts")
     parser.add_argument("--test", action="store_true",
-                         help="Process first 20k lines of each part only, no resume")
+                         help="First 20k lines of each part, into a new experiment database")
     parser.add_argument("--limit", type=int,
-                         help="Stop after N lines processed per part")
-    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+                         help="Stop after N lines per part in this session")
+    parser.add_argument("--resume", action="store_true",
+                         help="Continue the generation stored in the database")
+    parser.add_argument("--db", type=Path, default=None,
+                         help="Target database (default data/wrodfreq.db)")
     args = parser.parse_args()
 
-    if args.test:
-        # Same --test/--db footgun fix as ingest_news.py/ingest_subs.py: keep
-        # a disposable smoke run from writing progress into the checkpoint a
-        # real --resume would trust.
-        CHECKPOINT = CHECKPOINT.with_name(CHECKPOINT.stem + ".test.json")
-
+    try:
+        db_path = target_db(SOURCE_ID, args.db, args.test, args.resume)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     line_limit = 20_000 if args.test else args.limit
 
-    cp = load_checkpoint() if args.resume else _empty_checkpoint()
-    conn = connect(args.db)
-    # Row must exist before any part's flush() UPDATEs it — an UPDATE against
-    # a missing row is a silent no-op in SQLite, which would lose every
-    # in-progress total until (if ever) this function ran again at the end.
-    ensure_source_row(conn, "in progress — resolving parts")
+    def manifest() -> dict:
+        print("Resolving download URLs via the OPUS API...", flush=True)
+        return {key: resolve_download_url(part["opus_corpus"]) for key, part in PARTS.items()}
 
-    for key, part in PARTS.items():
-        part_cp = cp["parts"][key]
-        if part_cp["completed"]:
+    conn = connect(db_path)
+    try:
+        session = begin(conn, SPEC, resume=args.resume, initial_cursor=empty_cursor(),
+                        input_manifest=manifest, verify_manifest_on_resume=False)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        conn.close()
+        return 2
+    if session.finished:
+        conn.close()
+        return 0
+
+    pinned = session.input_manifest
+    cursor = json.loads(json.dumps(session.cursor))
+    batch = Batch(session)
+    for key in PARTS:
+        if cursor["parts"][key]["completed"]:
             print(f"  [{key}] already complete, skipping", flush=True)
             continue
-        process_part(key, part_cp, part["raw_file"], conn, cp, line_limit)
-        if _shutdown:
+        outcome = process_part(key, batch, cursor, pinned[key]["url"], line_limit)
+        if outcome == "refused":
             conn.close()
-            return 1
+            return 2
+        if outcome != "done":
+            batch.commit(cursor)
+            conn.close()
+            return 1 if outcome == "signal" else 0
+        batch.commit(cursor)
 
-    all_done = all(p["completed"] for p in cp["parts"].values())
-    version_notes = "; ".join(
-        f"{PARTS[k]['opus_corpus']} {p['version']}" for k, p in cp["parts"].items() if p["version"]
-    )
-    period_note = (f"Combines OPUS monolingual Romanian exports ({version_notes}) — "
-                    f"Europarl is spoken-then-transcribed parliamentary proceedings, "
-                    f"DGT is written EU legal/legislative translation memory; both "
-                    f"bureaucratic-formal, folded into one source_id per spec's panel "
-                    f"table. `documents` counts source lines/paragraphs, not the "
-                    f"document counts OPUS's own metadata reports.")
-    ensure_source_row(conn, period_note)
-
-    status = "completed" if all_done else "in_progress"
-    _flush_total(conn, cp, defaultdict(int), defaultdict(int), status)
-
-    total_tokens = sum(p["tokens_done"] for p in cp["parts"].values())
-    total_lines = sum(p["lines_done"] for p in cp["parts"].values())
-    print(f"\n{'Done' if all_done else 'Stopped'}: {total_lines:,} lines, "
-          f"{total_tokens:,} tokens across {len(PARTS)} parts", flush=True)
-
-    unique_words = conn.execute(
-        "SELECT COUNT(*) FROM source_counts WHERE source_id = ?", (SOURCE_ID,)
-    ).fetchone()[0]
-    print(f"Unique words: {unique_words:,}")
-
-    rows = conn.execute(
-        """
-        SELECT word, occurrences, documents FROM source_counts
-        WHERE source_id = ? ORDER BY occurrences DESC LIMIT 20
-        """,
-        (SOURCE_ID,),
-    ).fetchall()
-    if rows:
-        print("\nTop 20 by occurrence:")
-        for word, occurrences, documents in rows:
-            print(f"  {word:20s} {occurrences:>12,}  ({documents:,} docs)")
-
+    batch.commit(cursor, complete=True, period_note=period_note(pinned),
+                 provenance={"raw_files": {k: {"name": PARTS[k]["raw_file"].name,
+                                               "sha256": cursor["parts"][k]["raw_sha256"]}
+                                           for k in PARTS}})
+    total_tokens = sum(p["tokens_done"] for p in cursor["parts"].values())
+    total_lines = sum(p["lines_done"] for p in cursor["parts"].values())
+    print(f"\nDone: {total_lines:,} lines, {total_tokens:,} tokens across {len(PARTS)} parts",
+          flush=True)
     conn.close()
-    # 1 only for a real signal-interrupted stop (needs --resume); hitting
-    # --test/--limit intentionally is a normal exit, same convention as
-    # ingest_subs.py — otherwise the restart-loop's `[ $? -eq 0 ] && break`
-    # would treat a deliberate --limit run as needing an automatic retry.
-    return 0 if not _shutdown else 1
+    return 0
 
 
 if __name__ == "__main__":

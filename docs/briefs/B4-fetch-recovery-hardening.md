@@ -2,6 +2,15 @@
 
 **Owner:** Sonnet. **Status:** BLOCKED until the social crawl finishes. **Written:** 2026-10-02 by Opus.
 
+> **Completed 2026-11-09 as part of brief B7 (Phase 2).** All seven gaps are closed in
+> `build/fetch_social.py`; the tests are in `tests/test_fetch_social.py` and
+> `tests/test_fetch_finalize.py`. Gap 6 was decided by B7: an unfinished crawl is never
+> compacted; its append log stays until history is exhausted, and finalization is a
+> recoverable five-step state machine (`finalize()`). Gaps 2 and 3 take the rebuild-from-
+> file path: an incoherent `bytes` (absent, zero with records, beyond EOF, mid-line, or a
+> line count that disagrees) is rebuilt from the append log, never trusted. Gap 7: the
+> constant was already gone; a test keeps it gone. The crawl itself was not rerun.
+
 ## Do not start this while the crawl is running
 
 `build/run_social_fetch.sh` re-executes `build/fetch_social.py` on every loop iteration,

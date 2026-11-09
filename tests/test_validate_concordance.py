@@ -113,3 +113,25 @@ def test_matches_brute_force_on_random_input(seed):
              for _ in range(n)]
     for min_delta in (0.01, 0.1, 0.3, 0.5, 1.0):
         assert _concordance(pairs, min_delta) == brute_force(pairs, min_delta), min_delta
+
+
+def test_spearman_fallback_matches_the_ranked_method():
+    """Python 3.10/3.11 lack statistics.correlation(method="ranked")."""
+    import statistics
+    import validate as v
+    x = [1.0, 2.0, 2.0, 3.5, 4.0, 4.0, 9.0]
+    y = [2.0, 1.0, 3.0, 3.0, 5.0, 4.0, 8.0]
+    real = statistics.correlation
+
+    def no_ranked(a, b, **kw):
+        if kw:
+            raise TypeError("method")
+        return real(a, b)
+    statistics.correlation = no_ranked
+    try:
+        fallback = v._spearman(x, y)
+    finally:
+        statistics.correlation = real
+    if sys.version_info >= (3, 12):
+        assert fallback == pytest.approx(real(x, y, method="ranked"))
+    assert -1 <= fallback <= 1

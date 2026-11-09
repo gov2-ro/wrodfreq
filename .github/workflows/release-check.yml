@@ -1,17 +1,26 @@
-# Gate for a release. Runs when a version tag (v0.3.0, ...) is pushed, or by
-# hand from the Actions tab. It does NOT publish anything — publishing to PyPI
-# and the GitHub release stay manual (BACKLOG: M6).
+# Gate for a release. Runs when a version tag (v0.2.1, ...) is pushed, or by hand
+# from the Actions tab. It does NOT publish anything — publishing stays manual.
 #
-# What it adds on top of ci.yml:
-#   - the tag must match the version in pyproject.toml and wrodfreq/__init__.py
-#   - the full test matrix, Python 3.10 through 3.13
-#   - a wheel built and installed into a clean venv
-#   - docs/method.md and docs/sources.md must exist and mention the version's
-#     panel (so a release cannot go out with stale documentation)
+# It checks the ACTUAL prepared distribution (brief B7, finding A08), never a
+# wheel built here from a checkout without data:
+#   - the candidate bundle (made locally by build/make_distribution.py from one
+#     completed generation and its strict real-data validation report) is
+#     downloaded over HTTPS and its SHA-256 verified BEFORE extraction;
+#   - build/check_release.py checks the bundle: every file against candidate.json,
+#     the generation against result.json, the wheel and the sdist against the
+#     generation's data files, the report's binding to this build id, artifact
+#     hashes, code and version, and the tag; then installs the wheel into a clean
+#     venv and looks words up from outside the checkout;
+#   - a synthetic bundle, a missing report or a missing candidate FAILS.
 #
-# What it cannot do: run build/validate.py against the real corpus. The 3.7 GB
-# database is not in git. Run `python build/validate.py` locally and paste the
-# "N/N checks passed" line into the release notes.
+# Where the bundle comes from:
+#   - workflow_dispatch: the `bundle_url` and `bundle_sha256` inputs;
+#   - tag push: `.github/release-candidate.json` at the tagged revision,
+#     {"bundle_url": "https://...", "bundle_sha256": "<64 hex>"}.
+#
+# What it cannot do: rerun the corpus checks. The 4 GB database is not on the
+# runner. The hash-bound strict report records what the local run found; running
+# `python build/validate.py --strict` locally remains a documented release step.
 
 name: Release check
 
@@ -19,6 +28,13 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      bundle_url:
+        description: "HTTPS URL of the release-candidate bundle (.tar.gz)"
+        required: true
+      bundle_sha256:
+        description: "Expected SHA-256 of that tarball"
+        required: true
 
 jobs:
   version-matches-tag:
@@ -58,7 +74,8 @@ jobs:
           pip install -e ".[dev,build]"
       - run: pytest -q
 
-  wheel:
+  candidate:
+    name: the prepared release candidate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +83,32 @@ jobs:
         with:
           python-version: "3.12"
       - run: |
-          python -m pip install --upgrade pip build
-          python -m build
-          python -m venv /tmp/wheeltest
-          /tmp/wheeltest/bin/pip install -q dist/*.whl
-          /tmp/wheeltest/bin/python -c "import wrodfreq; print(wrodfreq.__version__, wrodfreq.lemma_detail('casă'))"
+          python -m pip install --upgrade pip
+          pip install -e ".[build]"
+      - name: Locate the candidate bundle
+        id: locate
+        env:
+          INPUT_URL: ${{ github.event.inputs.bundle_url }}
+          INPUT_SHA: ${{ github.event.inputs.bundle_sha256 }}
+        run: |
+          url="$INPUT_URL"; sha="$INPUT_SHA"
+          if [ -z "$url" ]; then
+            if [ ! -f .github/release-candidate.json ]; then
+              echo "::error::No release candidate. Prepare one locally (docs/release-runbook.md), host the bundle, and either commit .github/release-candidate.json with bundle_url and bundle_sha256 before tagging, or run this workflow by hand with those inputs."
+              exit 1
+            fi
+            url=$(python -c "import json;print(json.load(open('.github/release-candidate.json'))['bundle_url'])")
+            sha=$(python -c "import json;print(json.load(open('.github/release-candidate.json'))['bundle_sha256'])")
+          fi
+          case "$url" in https://*) ;; *) echo "::error::bundle_url must be https://"; exit 1;; esac
+          echo "$sha" | grep -Eq '^[0-9a-fA-F]{64}$' || { echo "::error::bundle_sha256 must be 64 hex digits"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Download (digest verified by check_release.py before extraction)
+        run: curl -fsSL --proto '=https' -o "$RUNNER_TEMP/bundle.tar.gz" "${{ steps.locate.outputs.url }}"
+      - name: Release preflight on the actual distribution
+        run: |
+          tag=""
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then tag="--tag $GITHUB_REF_NAME"; fi
+          env -u PYTHONPATH python build/check_release.py --bundle "$RUNNER_TEMP/bundle.tar.gz" \
+            --expected-sha256 "${{ steps.locate.outputs.sha }}" --install-test $tag

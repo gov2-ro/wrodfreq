@@ -14,13 +14,15 @@
 - [7. Limite cunoscute](#7-limite-cunoscute)
 - [8. Versiuni și citare](#8-versiuni-și-citare)
 - [9. Cum se reface totul de la zero](#9-cum-se-reface-totul-de-la-zero)
+- [10. Corecturile din 0.2.1](#10-corecturile-din-021)
 
 Acest document explică, pas cu pas și fără termeni de specialitate, cum se obține
 numărul pe care îl vezi când scrii `zipf_frequency('cuvânt')`. Cine vrea să cite tabelul
 într-o lucrare găsește la final ce să scrie. Sursele sunt descrise în
 [sources.md](sources.md).
 
-Versiunea descrisă aici: **0.2.0**.
+Versiunea descrisă aici: **0.2.1** (construcția `eb23d6fe219530ceb9bc65caef6475dc`).
+Ce s-a corectat față de 0.2.0 este în [secțiunea 10](#10-corecturile-din-021).
 
 ## 1. Ce este și ce nu este
 
@@ -182,8 +184,15 @@ Trei reguli fac diferența între o hartă bună și una greșită:
 `lemma_detail(cuvânt)` mai dă și numărul de forme, valoarea formei din dicționar luată
 singură și **`family_ratio`**: de câte ori ar fi fost mai mare totalul familiei dacă formele
 ambigue nu s-ar fi împărțit. Valoarea 1 înseamnă o familie fără ambiguitate. O valoare
-mare (`tinereță`: 128) arată că familia are forme comune cu cuvinte mult mai frecvente,
-așa că trebuie citită cu grijă.
+mare arată că familia are forme comune cu cuvinte mult mai frecvente, așa că trebuie
+citită cu grijă.
+
+Cele două totaluri se compară **pe aceleași surse**: sursele în care lema, după
+împărțire, trece de pragul de 5 apariții (`docs/decisions/ADR-005`). Totalul fără
+împărțire este cel puțin la fel de mare în fiecare sursă, deci raportul este cel puțin 1.
+În 0.2.0, totalul fără împărțire folosea și surse în plus, mari și cu valori mici, care îl
+trăgeau în jos. Așa au ieșit 2.382 de rapoarte sub 1 (de exemplu `detoxica`: 0,03). Din
+0.2.1 nu mai există niciunul.
 
 Lema se caută după forma din dicționar (`înmărmuri`, nu `înmărmurit`). Dacă
 cuvântul nu e o lemă, sau dacă pachetul nu conține stratul de leme,
@@ -198,29 +207,45 @@ poate desface, așa că nu amestecăm cele două.
 ## 6. Cum verificăm că tabelul e bun
 
 `build/validate.py` rulează la fiecare construcție și **oprește construcția** dacă ceva
-nu e în regulă:
+nu e în regulă. Din 0.2.1 verificarea **doar citește**: nu modifică baza de date și nu
+reface nicio tabelă. Pentru o versiune publică rulează în modul strict (`--strict`). În
+acest mod, o verificare care nu poate rula (de exemplu, lipsește `wordfreq`) pică, nu
+este sărită. Pe lângă cele de mai jos, verificarea strictă controlează:
+
+- **Integritatea.** Pentru fiecare sursă, suma aparițiilor este egală cu numitorul.
+  Fiecare valoare derivată se recalculează din numărători și se compară cu cea din bază.
+- **Proveniența.** Baza de date este exact starea descrisă de manifestul construcției:
+  aceleași surse, aceleași numărători (după amprenta lor).
+- **Fișierele livrate.** Fiecare fișier din pachet și din TSV are amprenta din manifest și
+  conține exact rândurile și valorile din baza de date.
+
+Verificările de calitate (măsurate pe 0.2.1):
 
 1. **Cuvintele-unealtă sunt sus.** `de`, `și`, `la`, `un`, `cu` trebuie să aibă Zipf între
    6,0 și 8,0. Dacă nu, numitorul e greșit. Este cea mai importantă verificare. Acum:
-   `de` 7,68, `și` 7,34, `la` 7,23, `un` 6,94, `cu` 7,08.
+   `de` 7,68, `și` 7,34, `la` 7,23, `un` 6,93, `cu` 7,07.
 2. **Acord cu `wordfreq`.** Luăm perechile de cuvinte pe care `wordfreq` le vede clar
    diferite (cel puțin 0,3 pe scara Zipf) și verificăm că le ordonăm la fel. Cerința:
    cel puțin 93%. Acum: **94,8%**. Valorile noastre ies în medie cu 0,20 mai mici decât
-   cele din `wordfreq`.
+   cele din `wordfreq`. În plus, cel puțin 99% din cuvintele cu Zipf ≥ 3 din `wordfreq`
+   trebuie să fie în tabel. Acum: 43.095 din 43.413 (99,27%). Referința este `wordfreq`
+   3.1.1; raportul îi păstrează amprenta.
 3. **59 de perechi alese de mână** (de exemplu, un cuvânt comun trebuie să fie peste unul
-   rar). Acum: toate corecte.
+   rar). Acum: toate prezente și toate corecte. O pereche care lipsește pică.
 4. **Acoperirea DEX.** Cel puțin 95% din lemele cu frecvență peste 0,8 trebuie să apară.
    Acum: 97,7%. Dacă scade, înseamnă că un filtru cu dicționar s-a strecurat înapoi.
 5. **Raportul de dezacord** (nu trece/pică): primele 100 de cuvinte după `spread`, de
    citit cu ochii. Aici se văd nume proprii, termeni din domenii și forme fără diacritice.
-6. **Reconstruire identică.** Dacă rulezi din nou pașii 2–5 pe aceleași numărători,
-   fișierul de date iese identic, bit cu bit.
+6. **Reconstruire identică.** Comanda separată `build/check_rebuild.py` copiază doar
+   numărătorile într-o bază nouă, reface pașii 2–5 și compară rezultatul cu cel verificat.
+   Fișierele trebuie să fie identice bit cu bit, iar tabelele, identice ca rânduri.
 
 Coeficientul Spearman față de `wordfreq` este afișat (acum 0,851) dar **nu este o
 condiție**: între cuvinte cu frecvențe foarte apropiate, ordinea depinde de zgomot (și
 în `wordfreq`), nu de calitate.
 
-Pe lângă acestea, un set de teste (230) rulează la fiecare modificare; vezi `.github/`.
+Pe lângă acestea, un set de teste (peste 400, fără date reale) rulează la fiecare
+modificare; vezi `.github/`.
 
 ## 7. Limite cunoscute
 
@@ -251,6 +276,14 @@ Tabelul nu e perfect. Iată ce știm și nu am rezolvat.
   forma unui cuvânt.
 - **Perioada.** Sursele sunt texte din ultimele decenii. Tabelul nu spune nimic despre
   româna veche sau despre cum se scria acum o sută de ani.
+- **`n_reliable` numără surse, nu dovedește independența lor.** Sursele se suprapun în
+  parte: site-uri de știri apar și în `web`, iar pe Reddit se citează știri. Când o singură
+  sursă e sigură, `spread` este 0. Valoarea 0 nu înseamnă că sursele sunt de acord, ci că
+  nu există cu ce compara.
+- **Proveniența celor cinci surse vechi.** Pentru `eu`, `news`, `subs`, `web` și `wiki`,
+  numărătorile din 0.2.0 sunt păstrate și verificate după amprentă. Fișierele brute din
+  care au fost numărate nu au fost înregistrate atunci, deci verificarea nu dovedește o
+  renumărare de la zero. Doar `social` a fost renumărat din fișierele brute în 0.2.1.
 
 ## 8. Versiuni și citare
 
@@ -259,26 +292,67 @@ Pachetul îți spune exact ce construcție folosești:
 
 ```python
 >>> import wrodfreq
->>> wrodfreq.build_info()
-{'version': '0.2.0', 'sources': ['eu', 'news', 'social', 'subs', 'web', 'wiki'],
- 'built': '2026-10-05'}
+>>> info = wrodfreq.build_info()
+>>> info['version'], info['build_id'], info['built']
+('0.2.1', 'eb23d6fe219530ceb9bc65caef6475dc', '2026-11-09')
+>>> info['sources']
+['eu', 'news', 'social', 'subs', 'web', 'wiki']
 ```
 
-Într-o lucrare, scrie versiunea și lista surselor din `build_info()`, de exemplu:
+`build_id` identifică exact construcția: aceleași numărători, același cod, aceeași dată de
+construcție dau același `build_id` și aceleași fișiere, bit cu bit. Într-o lucrare, scrie
+versiunea, `build_id` și lista surselor, de exemplu:
 
-> wROdfreq 0.2.0 (construit la 5 octombrie 2026; surse: eu, news, social, subs, web,
-> wiki), https://github.com/gov2-ro/wrodfreq
+> wROdfreq 0.2.1, construcția eb23d6fe219530ceb9bc65caef6475dc (9 noiembrie 2026; surse:
+> eu, news, social, subs, web, wiki), https://github.com/gov2-ro/wrodfreq
 
 ## 9. Cum se reface totul de la zero
 
 ```bash
-python build/ingest_<sursă>.py     # câte unul pentru wiki, web, news, subs, eu, social
-python build/compute_zipf.py       # valoarea Zipf și pragul, pe sursă
-python build/merge.py              # combinarea surselor
-python build/build_lemma_layer.py  # stratul de leme (are nevoie de harta DEX)
-python build/build_package.py      # fișierele de date din pachet
-python build/validate.py           # verificările din secțiunea 6
+python build/ingest_<sursă>.py --db STAGING.db   # câte unul pentru wiki, web, news, subs, eu, social
+python build/compute_zipf.py --db STAGING.db     # valoarea Zipf și pragul, pe sursă
+python build/merge.py --db STAGING.db            # combinarea surselor
+python build/build_lemma_layer.py --db STAGING.db   # stratul de leme (are nevoie de harta DEX)
+python build/build_manifest.py --db STAGING.db --build-date AAAA-LL-ZZ --out inputs.json
+python build/build_package.py --db STAGING.db --manifest inputs.json --out-root builds
+python build/validate.py --db STAGING.db --generation builds/<build_id> --strict --report r.json
+python build/check_rebuild.py --db STAGING.db --generation builds/<build_id> --work-dir tmp
 ```
 
-Colectarea surselor mari durează zile; fiecare script poate fi oprit și reluat din
-punctul în care a rămas.
+Colectarea surselor mari durează zile. Fiecare script poate fi oprit și reluat din
+punctul în care a rămas: poziția se salvează în aceeași tranzacție cu numărătorile, deci
+o oprire nu pierde și nu dublează nimic. Pașii completi, cu promovarea și revenirea, sunt
+în `docs/release-runbook.md`.
+
+## 10. Corecturile din 0.2.1
+
+Pe 9 noiembrie 2026, un audit al construcției 0.2.0 a găsit două erori în date. Toate
+testele și verificările de calitate treceau totuși.
+
+1. **`social` era numărat parțial de două ori.** O rulare de probă scrisese în baza
+   reală, iar rularea completă a adunat peste ea. Suma aparițiilor era 566.678.860, iar
+   numitorul 536.523.553. Diferența, 30.155.307, este exact rularea de probă. În 0.2.1,
+   `social` a fost renumărat din cele 30 de fișiere brute păstrate, cu același
+   tokenizator și aceleași filtre. Rezultatul este exact 536.523.553 de cuvinte în
+   13.717.928 de mesaje.
+2. **2.382 de leme aveau `family_ratio` sub 1.** Explicația și corectura sunt în
+   secțiunea 5.
+
+Ce s-a schimbat față de 0.2.0 (măsurat, `compare_builds.py`):
+
+- **`social`**: valorile Zipf ale cuvintelor doar au scăzut (median −0,015; cel mult
+  −0,30, adică o numărătoare dublată în întregime). 13.955 de cuvinte nu mai trec pragul
+  în `social`.
+- **Tabelul combinat**: 2.036 de cuvinte ies din tabel (toate erau sigure doar în
+  `social`, chiar peste prag) și niciunul nu intră. 11.919 cuvinte au acum o sursă sigură
+  mai puțin. 158.480 de valori se schimbă cu mai mult de 0,005; pentru jumătate dintre
+  cuvinte schimbarea este 0. Schimbările mari (până la ±0,93) apar acolo unde `social` era
+  una din doar două surse. În pachet sunt acum 6.039.510 cuvinte (înainte 6.041.542).
+- **Leme**: 180.565 (înainte 180.569); 25.455 de valori se schimbă cu mai mult de 0,005;
+  rapoarte `family_ratio` sub 1: 0 (înainte 2.382).
+
+Celelalte cinci surse nu s-au schimbat: amprentele numărătorilor lor sunt identice cu
+cele din 0.2.0. Construcția a schimbat și felul în care se lucrează, ca eroarea să nu se
+repete: poziția de reluare se salvează odată cu numărătorile, o rulare de probă scrie
+mereu într-o bază separată, iar verificarea doar citește (`docs/decisions/ADR-004`,
+`ADR-005`, `ADR-006`).

@@ -7,6 +7,36 @@ consolidated pointer, not a new source of truth — everything here is covered i
 in `docs/activity-history.md`'s dated entries and `docs/BACKLOG.md`'s checklist. Read this
 first to reorient, then follow the links.
 
+## Immediate follow-up — the 0.2.1 candidate needs an owner decision (2026-11-09)
+
+**Brief B7 is implemented** — all nine audit findings (A01–A09) are fixed in code with
+regression tests across the real ingesters, and a corrected candidate was built and
+verified **in staging**. Nothing was promoted, tagged or published; the baseline
+database, blobs, review TSV, checkpoints and dumps are byte-identical to before.
+
+- **Candidate:** build `eb23d6fe219530ceb9bc65caef6475dc` (0.2.1, data format 2) in
+  `data/staging/2026-11-09-b7/`. Social was recounted from the 30 retained dumps:
+  exactly 536,523,553 tokens / 13,717,928 documents. Strict read-only validation 8/8
+  (`release_eligible`), independent rebuild byte-identical, release preflight with an
+  installed-wheel test passes. Deltas: 2,036 words leave `merged`, 158,480 values move
+  by > 0.005 (median 0), 2,382 → 0 lemma ratios below 1. Details:
+  `docs/activity-history.md` (2026-11-09) and `docs/release-runbook.md` §5.
+- **Decide:** promote the candidate (runbook §2) or not. First commit the B7 code and
+  re-manifest from the committed tree (runbook §5, ~25 min) — the current manifest names
+  `81635a6` + `dirty: true`.
+- **The working checkout's `wrodfreq/data/` still holds the 0.2.0 (format 1) blobs.** The
+  0.2.1 code refuses them with a rebuild message; `build_package.py --install` with the
+  candidate generation fixes that (part of promotion).
+- **Public review copy:** the Drive TSV is still 0.2.0 and has both defects; the README
+  now says so. Replace it (new checksum) only after adoption.
+- **Do not** run a stage against `data/wrodfreq.db` to inspect it. `build/integrity.py`
+  and `build/validate.py` open it read-only; everything else writes.
+- New in BACKLOG: `top_n_list(n, lang)` argument order differs from `wordfreq`; research
+  questions about what `n_reliable`/`spread` can claim (no estimator change made).
+
+The portable `docs/briefs/B7-audit-reproduce.py` asserts the *old* broken behaviour and
+now fails on its first case, as intended. The historical status below predates the audit.
+
 ## Where things stand (2026-10-05)
 
 - **Version 0.2.0, a release candidate. Not published.** Six sources (`web`, `news`,
@@ -35,9 +65,9 @@ first to reorient, then follow the links.
 
 `CLAUDE.md` gained an "Opus designs, Sonnet builds" section. In practice:
 
-- `docs/briefs/` — one self-contained brief per task, written before the work. Sonnet runs
-  it without needing the specs. B1, B2, B3, B5, B6 are done; **B4 is the only queued item**
-  and is blocked until the crawl finishes.
+- `docs/briefs/` — one self-contained brief per task, written before the work. The agent
+  runs it without needing the specs. B1–B7 are done (B4 inside B7). Check for an actual live crawl before editing scripts
+  used by a restart loop.
 - `docs/decisions/` — ADRs for calls that outlive their brief. ADR-001 (`zipf_frequency`
   tokenizes; extensions stay exact lookup) and ADR-002 (do not widen the token class;
   legacy Romanian variants are the real defect).
@@ -134,6 +164,10 @@ labelling the one-hyphen rows, and re-validating those decisions. The foreign-di
 ```bash
 cd ~/devbox/gov2/wrodfreq
 python build/status.py          # point-in-time pipeline progress
-python build/validate.py        # 5 checks + idempotence (~12 min; rebuilds merged/lemma_zipf/package)
-python -m pytest tests/ -q      # ~230 tests, well under a second
+python -m pytest tests/ -q      # audit baseline: 231 passing tests
+python docs/briefs/B7-audit-reproduce.py  # old failures, temporary files only
 ```
+
+The current `status.py` uses the schema-applying DB helper; for strictly read-only
+baseline inspection use a SQLite `mode=ro` connection as B7 specifies. Restore a normal
+`validate.py` inspection command here after B7 makes validation read-only.

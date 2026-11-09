@@ -44,9 +44,9 @@ wrodfreq.tokenizer directly (spec §3).
 
 Usage:
     python build/ingest_subs.py              # full run (download, then ingest)
-    python build/ingest_subs.py --test       # first 200k lines only, no resume
-    python build/ingest_subs.py --limit N    # stop after N total lines processed
-    python build/ingest_subs.py --resume     # pick up from checkpoint
+    python build/ingest_subs.py --test       # first 200k lines, into a new experiment db
+    python build/ingest_subs.py --limit N    # stop after N lines *in this session*
+    python build/ingest_subs.py --resume     # continue the generation stored in the db
 
 Restart loop (stop automatically on success):
     while true; do
@@ -55,31 +55,35 @@ Restart loop (stop automatically on success):
         echo "[$(date)] restarting in 15s..." && sleep 15
     done
 
-Output: data/wrodfreq.db, source_id='subs'. Checkpoint: data/checkpoints/subs_checkpoint.json
+Output: data/wrodfreq.db, source_id='subs'. Progress: `ingest_state` in the same db,
+committed with the counts (ADR-004). The pinned URL/version is the generation's input
+manifest; the raw file's SHA-256 is pinned in the cursor at the first batch, and a
+resume against a different file is refused.
 Raw download cached at: data/raw/opensubtitles_ro.txt.gz (gitignored, shared
 freely between --test and real runs — it's just cached source bytes, not
-progress; only the *processing* checkpoint is test/real-sensitive, see below).
+progress).
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import itertools
 import json
 import os
 import signal
-import sqlite3
 import sys
 import time
 import urllib.request
-from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from ingest_state import Batch, IngestRefused, SourceSpec, begin, target_db
+from wrodfreq.db import connect
 from wrodfreq.tokenizer import tokenize
 
 SOURCE_ID     = "subs"
@@ -94,9 +98,17 @@ PERIOD        = "contemporary"
 OPUS_API = "https://opus.nlpl.eu/opusapi"
 
 RAW_FILE      = Path("data/raw/opensubtitles_ro.txt.gz")
-CHECKPOINT    = Path("data/checkpoints/subs_checkpoint.json")
 DOWNLOAD_CHUNK = 1 << 20        # 1 MiB
-COMMIT_EVERY   = 500_000        # lines between DB commits
+COMMIT_EVERY   = 500_000        # lines between commits
+CURSOR_VERSION = 1
+
+SPEC = SourceSpec(
+    source_id=SOURCE_ID, display_name=DISPLAY_NAME, url=URL, licence=LICENCE,
+    register=REGISTER, period=PERIOD, period_note=None,
+    cursor_version=CURSOR_VERSION,
+    policy={"policy_version": 1, "corpus": "OpenSubtitles", "unit": "line",
+            "decode": "utf-8/replace"},
+)
 
 _shutdown = False
 
@@ -113,7 +125,7 @@ def _handle_signal(sig, frame):
         # process while any such thread is alive. os._exit() terminates at
         # the OS level immediately, unconditionally.
         print(f"\n[{datetime.now()}] second signal {sig} — forcing immediate exit "
-              f"(progress since the last checkpoint is lost)", flush=True)
+              f"(the uncommitted batch is lost and will be re-read)", flush=True)
         os._exit(1)
     print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch "
           f"(press again to force quit immediately, e.g. if stuck mid-download)", flush=True)
@@ -203,79 +215,24 @@ def download_resumable(url: str, dest: Path) -> None:
     print(f"  download complete: {final_size:,} bytes", flush=True)
 
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
-
-def ensure_source_row(conn: sqlite3.Connection, period_note: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO sources (source_id, display_name, url, licence, register,
-                              period, period_note, total_tokens, total_docs, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'in_progress')
-        ON CONFLICT(source_id) DO UPDATE SET period_note = excluded.period_note
-        """,
-        (SOURCE_ID, DISPLAY_NAME, URL, LICENCE, REGISTER, PERIOD, period_note),
-    )
-    conn.commit()
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
-def flush(conn: sqlite3.Connection, word_counts: dict, doc_counts: dict,
-          total_tokens: int, total_docs: int, status: str) -> None:
-    if word_counts:
-        conn.executemany(
-            """
-            INSERT INTO source_counts (word, source_id, occurrences, documents)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(word, source_id) DO UPDATE SET
-                occurrences = occurrences + excluded.occurrences,
-                documents   = documents   + excluded.documents
-            """,
-            [(w, SOURCE_ID, c, doc_counts[w]) for w, c in word_counts.items()],
-        )
-        word_counts.clear()
-        doc_counts.clear()
-    conn.execute(
-        """
-        UPDATE sources SET total_tokens = ?, total_docs = ?, status = ?,
-                            ingested_at = ?
-        WHERE source_id = ?
-        """,
-        (total_tokens, total_docs, status,
-         datetime.now(timezone.utc).isoformat(), SOURCE_ID),
-    )
-    conn.commit()
+def empty_cursor() -> dict:
+    return {"lines_done": 0, "tokens_done": 0, "raw_sha256": None}
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------------------------
-
-def _empty_checkpoint() -> dict:
-    return {
-        "download_url": None,
-        "version": None,
-        "lines_done": 0,
-        "tokens_done": 0,
-    }
-
-
-def load_checkpoint() -> dict:
-    if CHECKPOINT.exists():
-        try:
-            cp = _empty_checkpoint()
-            cp.update(json.loads(CHECKPOINT.read_text()))
-            return cp
-        except (json.JSONDecodeError, ValueError):
-            print("warning: corrupted checkpoint, starting fresh")
-    return _empty_checkpoint()
-
-
-def save_checkpoint(cp: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp, indent=2))
-    tmp.replace(CHECKPOINT)
+def period_note(version: str) -> str:
+    return (f"OPUS OpenSubtitles {version} Romanian monolingual export; "
+            f"movie release dates not preserved in this text-only export — "
+            f"treat as an undated snapshot of film/TV dialogue. `documents` "
+            f"counts subtitle lines, not the underlying films (no per-file "
+            f"boundary data in this release).")
 
 
 # ---------------------------------------------------------------------------
@@ -283,54 +240,62 @@ def save_checkpoint(cp: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    global CHECKPOINT
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Ingest OpenSubtitles RO into source_counts")
     parser.add_argument("--test", action="store_true",
-                         help="Process first 200k lines only, no resume")
+                         help="First 200k lines, into a new experiment database")
     parser.add_argument("--limit", type=int,
-                         help="Stop after N total lines processed")
-    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+                         help="Stop after N lines processed in this session")
+    parser.add_argument("--resume", action="store_true",
+                         help="Continue the generation stored in the database")
+    parser.add_argument("--db", type=Path, default=None,
+                         help="Target database (default data/wrodfreq.db)")
     args = parser.parse_args()
 
-    if args.test:
-        # --test already means "no resume"; keep it from writing progress
-        # into the checkpoint a real --resume would trust, same fix as
-        # ingest_news.py's --test/--db footgun (activity-history 2026-09-06).
-        CHECKPOINT = CHECKPOINT.with_name(CHECKPOINT.stem + ".test.json")
-
+    try:
+        db_path = target_db(SOURCE_ID, args.db, args.test, args.resume)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     line_limit = 200_000 if args.test else args.limit
 
-    cp = load_checkpoint() if args.resume else _empty_checkpoint()
-
-    if cp["download_url"] is None:
+    def manifest() -> dict:
         print("Resolving OpenSubtitles RO download URL via OPUS API...", flush=True)
         resolved = resolve_download_url()
-        cp["download_url"] = resolved["url"]
-        cp["version"] = resolved["version"]
-        save_checkpoint(cp)
-    print(f"  {cp['download_url']} (version {cp['version']})", flush=True)
+        return {"url": resolved["url"], "version": resolved["version"]}
 
+    conn = connect(db_path)
+    try:
+        session = begin(conn, SPEC, resume=args.resume, initial_cursor=empty_cursor(),
+                        input_manifest=manifest, verify_manifest_on_resume=False)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        conn.close()
+        return 2
+    if session.finished:
+        conn.close()
+        return 0
+
+    pinned = session.input_manifest
+    cursor = dict(session.cursor)
+    print(f"  {pinned['url']} (version {pinned['version']})", flush=True)
     print("Downloading (resumable)...", flush=True)
-    download_resumable(cp["download_url"], RAW_FILE)
+    download_resumable(pinned["url"], RAW_FILE)
     if _shutdown:
+        conn.close()
         return 1
 
-    period_note = (f"OPUS OpenSubtitles {cp['version']} Romanian monolingual export; "
-                    f"movie release dates not preserved in this text-only export — "
-                    f"treat as an undated snapshot of film/TV dialogue. `documents` "
-                    f"counts subtitle lines, not the underlying films (no per-file "
-                    f"boundary data in this release).")
+    raw_sha = sha256_file(RAW_FILE)
+    if cursor["raw_sha256"] not in (None, raw_sha):
+        print(f"refused: {RAW_FILE} changed since this generation began "
+              f"(sha256 {cursor['raw_sha256'][:12]} then, {raw_sha[:12]} now); restore it "
+              f"or rebuild into an empty staged database", file=sys.stderr)
+        conn.close()
+        return 2
+    cursor["raw_sha256"] = raw_sha
 
-    conn = connect(args.db)
-    ensure_source_row(conn, period_note)
-
-    print(f"Processing lines (skipping first {cp['lines_done']:,} already counted)...",
+    print(f"Processing lines (skipping first {cursor['lines_done']:,} already counted)...",
           flush=True)
-
-    word_counts: dict = defaultdict(int)
-    doc_counts: dict = defaultdict(int)
-    since_flush = 0
+    batch = Batch(session)
     start = time.time()
     session_lines = 0
     exhausted = False
@@ -338,70 +303,34 @@ def main() -> int:
     with gzip.open(RAW_FILE, "rt", encoding="utf-8", errors="replace") as f:
         # Fast-forward past already-counted lines — no random seek into a
         # gzip stream, so this means decompressing from byte 0 every resume.
-        if cp["lines_done"]:
-            for _ in itertools.islice(f, cp["lines_done"]):
+        if cursor["lines_done"]:
+            for _ in itertools.islice(f, cursor["lines_done"]):
                 pass
-
         for line in f:
             if _shutdown:
                 break
-
             tokens = tokenize(line)
-            doc_words: set = set()
-            for tok in tokens:
-                word_counts[tok] += 1
-                doc_words.add(tok)
-            for w in doc_words:
-                doc_counts[w] += 1
-
-            cp["lines_done"] += 1
-            cp["tokens_done"] += len(tokens)
+            batch.add_document(tokens)
+            cursor["lines_done"] += 1
+            cursor["tokens_done"] += len(tokens)
             session_lines += 1
-            since_flush += 1
-
             if line_limit is not None and session_lines >= line_limit:
                 break
-
-            if since_flush >= COMMIT_EVERY:
-                flush(conn, word_counts, doc_counts, cp["tokens_done"], cp["lines_done"],
-                      "in_progress")
-                save_checkpoint(cp)
-                since_flush = 0
+            if batch.ndocs >= COMMIT_EVERY:
+                batch.commit(cursor)
                 elapsed = time.time() - start
-                rate = session_lines / elapsed if elapsed > 0 else 0
-                print(f"  {cp['lines_done']:,} lines | {cp['tokens_done']:,} tokens | "
-                      f"{rate:.0f} lines/s", flush=True)
-
+                print(f"  {cursor['lines_done']:,} lines | {cursor['tokens_done']:,} tokens | "
+                      f"{session_lines / elapsed if elapsed > 0 else 0:.0f} lines/s", flush=True)
         else:
-            # Loop completed without break: the file is fully exhausted.
             exhausted = True
 
     completed = exhausted and not _shutdown
-    status = "completed" if completed else "in_progress"
-    flush(conn, word_counts, doc_counts, cp["tokens_done"], cp["lines_done"], status)
-    save_checkpoint(cp)
-
-    elapsed = time.time() - start
-    print(f"\n{'Done' if completed else 'Stopped'}: {cp['lines_done']:,} lines, "
-          f"{cp['tokens_done']:,} tokens in {elapsed:.0f}s", flush=True)
-
-    unique_words = conn.execute(
-        "SELECT COUNT(*) FROM source_counts WHERE source_id = ?", (SOURCE_ID,)
-    ).fetchone()[0]
-    print(f"Unique words: {unique_words:,}")
-
-    rows = conn.execute(
-        """
-        SELECT word, occurrences, documents FROM source_counts
-        WHERE source_id = ? ORDER BY occurrences DESC LIMIT 20
-        """,
-        (SOURCE_ID,),
-    ).fetchall()
-    if rows:
-        print("\nTop 20 by occurrence:")
-        for word, occurrences, documents in rows:
-            print(f"  {word:20s} {occurrences:>12,}  ({documents:,} docs)")
-
+    batch.commit(cursor, complete=completed,
+                 period_note=period_note(pinned["version"]) if completed else None,
+                 provenance={"raw_file": {"name": RAW_FILE.name, "sha256": raw_sha,
+                                          "size": RAW_FILE.stat().st_size}})
+    print(f"\n{'Done' if completed else 'Stopped'}: {cursor['lines_done']:,} lines, "
+          f"{cursor['tokens_done']:,} tokens in {time.time() - start:.0f}s", flush=True)
     conn.close()
     return 0 if (completed or not _shutdown) else 1
 

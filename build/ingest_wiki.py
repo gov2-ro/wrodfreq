@@ -15,9 +15,9 @@ Every token counted, no DEX filter (spec §3.1); no length filter on tokens
 
 Usage:
     python build/ingest_wiki.py               # full run
-    python build/ingest_wiki.py --test        # first 1000 articles, no resume
-    python build/ingest_wiki.py --limit N     # stop after N total articles
-    python build/ingest_wiki.py --resume      # pick up from checkpoint
+    python build/ingest_wiki.py --test        # first 1000 articles, into a new experiment db
+    python build/ingest_wiki.py --limit N     # stop at absolute article N (across sessions)
+    python build/ingest_wiki.py --resume      # continue the generation stored in the db
 
 Restart loop (stop automatically on success):
     while true; do
@@ -26,24 +26,25 @@ Restart loop (stop automatically on success):
         echo "restarting in 15s..." && sleep 15
     done
 
-Output: data/wrodfreq.db, source_id='wiki'. Checkpoint: data/checkpoints/wiki_checkpoint.json
+Output: data/wrodfreq.db, source_id='wiki'. Progress: the `ingest_state` table in the
+same database, committed with the counts (ADR-004, build/ingest_state.py). A fresh run
+refuses a database that already holds wiki counts.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import signal
-import sqlite3
 import sys
 import time
-from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from ingest_state import Batch, IngestRefused, SourceSpec, begin, target_db
+from wrodfreq.db import connect
 from wrodfreq.tokenizer import tokenize
 
 SOURCE_ID     = "wiki"
@@ -57,15 +58,23 @@ PERIOD_NOTE   = "2023-11-01 Wikimedia dump snapshot"
 HF_DATASET    = "wikimedia/wikipedia"
 HF_CONFIG     = "20231101.ro"
 
-CHECKPOINT    = Path("data/checkpoints/wiki_checkpoint.json")
-COMMIT_EVERY  = 2000  # documents between flushes
+COMMIT_EVERY  = 2000  # documents between commits
+CURSOR_VERSION = 1
+
+SPEC = SourceSpec(
+    source_id=SOURCE_ID, display_name=DISPLAY_NAME, url=URL, licence=LICENCE,
+    register=REGISTER, period=PERIOD, period_note=PERIOD_NOTE,
+    cursor_version=CURSOR_VERSION,
+    policy={"policy_version": 1, "dataset": HF_DATASET, "config": HF_CONFIG,
+            "text_field": "text", "unit": "article"},
+)
 
 _shutdown = False
 
 
 def _handle_signal(sig, frame):
     global _shutdown
-    print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after this document",
+    print(f"\n[{datetime.now()}] signal {sig} — committing and exiting after this document",
           flush=True)
     _shutdown = True
 
@@ -75,151 +84,87 @@ signal.signal(signal.SIGHUP, _handle_signal)
 signal.signal(signal.SIGINT, _handle_signal)
 
 
-def _empty_checkpoint() -> dict:
+def empty_cursor() -> dict:
     return {"next_row": 0, "docs_done": 0, "tokens_done": 0}
 
 
-def load_checkpoint() -> dict:
-    if CHECKPOINT.exists():
-        try:
-            cp = _empty_checkpoint()
-            cp.update(json.loads(CHECKPOINT.read_text()))
-            return cp
-        except (json.JSONDecodeError, ValueError):
-            print("warning: corrupted checkpoint, starting fresh")
-    return _empty_checkpoint()
-
-
-def save_checkpoint(cp: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp, indent=2))
-    tmp.replace(CHECKPOINT)
-
-
-def ensure_source_row(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        INSERT INTO sources (source_id, display_name, url, licence, register,
-                              period, period_note, total_tokens, total_docs, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'in_progress')
-        ON CONFLICT(source_id) DO NOTHING
-        """,
-        (SOURCE_ID, DISPLAY_NAME, URL, LICENCE, REGISTER, PERIOD, PERIOD_NOTE),
-    )
-    conn.commit()
-
-
-def flush(conn: sqlite3.Connection, occ: Counter, docs: Counter,
-          cp: dict, status: str) -> None:
-    if occ:
-        conn.executemany(
-            """
-            INSERT INTO source_counts (word, source_id, occurrences, documents)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(word, source_id) DO UPDATE SET
-                occurrences = occurrences + excluded.occurrences,
-                documents   = documents   + excluded.documents
-            """,
-            [(w, SOURCE_ID, c, docs[w]) for w, c in occ.items()],
-        )
-        occ.clear()
-        docs.clear()
-    conn.execute(
-        """
-        UPDATE sources SET total_tokens = ?, total_docs = ?, status = ?,
-                            ingested_at = ?
-        WHERE source_id = ?
-        """,
-        (cp["tokens_done"], cp["docs_done"], status,
-         datetime.now(timezone.utc).isoformat(), SOURCE_ID),
-    )
-    conn.commit()
+def open_dataset():
+    """(indexable rows with a 'text' field, input manifest). Tests replace this."""
+    from datasets import load_dataset
+    ds = load_dataset(HF_DATASET, HF_CONFIG, split="train")
+    manifest = {"dataset": HF_DATASET, "config": HF_CONFIG, "num_rows": len(ds),
+                "fingerprint": getattr(ds, "_fingerprint", None)}
+    return ds, manifest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Ingest Wikipedia RO into source_counts")
     parser.add_argument("--test", action="store_true",
-                         help="Process first 1000 articles only, no resume")
+                         help="First 1000 articles, into a new experiment database")
     parser.add_argument("--limit", type=int,
-                         help="Stop after N total articles")
+                         help="Stop at absolute article N (counted across sessions)")
     parser.add_argument("--resume", action="store_true",
-                         help="Resume from checkpoint")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+                         help="Continue the generation stored in the database")
+    parser.add_argument("--db", type=Path, default=None,
+                         help="Target database (default data/wrodfreq.db)")
     args = parser.parse_args()
 
+    try:
+        db_path = target_db(SOURCE_ID, args.db, args.test, args.resume)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     limit = 1000 if args.test else args.limit
 
-    print(f"Loading {HF_DATASET} ({HF_CONFIG}) ...", flush=True)
-    from datasets import load_dataset
-    ds = load_dataset(HF_DATASET, HF_CONFIG, split="train")
-    total_rows = len(ds)
-    print(f"  {total_rows:,} articles", flush=True)
+    conn = connect(db_path)
+    loaded: dict = {}
 
-    conn = connect(args.db)
-    ensure_source_row(conn)
+    def manifest() -> dict:
+        print(f"Loading {HF_DATASET} ({HF_CONFIG}) ...", flush=True)
+        loaded["ds"], m = open_dataset()
+        return m
 
-    cp = load_checkpoint() if args.resume else _empty_checkpoint()
-    end_row = total_rows if limit is None else min(total_rows, limit)
-    if cp["next_row"] >= end_row:
-        print(f"Nothing to do: checkpoint at row {cp['next_row']:,}, target {end_row:,}")
+    try:
+        session = begin(conn, SPEC, resume=args.resume, initial_cursor=empty_cursor(),
+                        input_manifest=manifest)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        conn.close()
+        return 2
+    if session.finished:
+        conn.close()
         return 0
-    if args.resume and cp["next_row"]:
-        print(f"Resuming at row {cp['next_row']:,}/{total_rows:,}", flush=True)
+    ds = loaded["ds"]
+    total_rows = len(ds)
+    cursor = dict(session.cursor)
+    end_row = total_rows if limit is None else min(total_rows, limit)
+    print(f"  {total_rows:,} articles; starting at row {cursor['next_row']:,}", flush=True)
 
-    occ: Counter = Counter()
-    docs: Counter = Counter()
+    batch = Batch(session)
     start = time.time()
-    since_flush = 0
     session_docs = 0
-
-    for i in range(cp["next_row"], end_row):
+    for i in range(cursor["next_row"], end_row):
         if _shutdown:
             break
-
-        text = ds[i]["text"] or ""
-        tokens = tokenize(text)
-        occ.update(tokens)
-        for w in set(tokens):
-            docs[w] += 1
-
-        cp["next_row"] = i + 1
-        cp["docs_done"] += 1
-        cp["tokens_done"] += len(tokens)
-        since_flush += 1
+        tokens = tokenize(ds[i]["text"] or "")
+        batch.add_document(tokens)
+        cursor["next_row"] = i + 1
+        cursor["docs_done"] += 1
+        cursor["tokens_done"] += len(tokens)
         session_docs += 1
-
-        if since_flush >= COMMIT_EVERY:
-            flush(conn, occ, docs, cp, "in_progress")
-            save_checkpoint(cp)
-            since_flush = 0
+        if batch.ndocs >= COMMIT_EVERY:
+            batch.commit(cursor)
             elapsed = time.time() - start
-            rate = session_docs / elapsed if elapsed > 0 else 0
-            print(f"  {cp['next_row']:,}/{total_rows:,} rows | "
-                  f"{cp['tokens_done']:,} tokens | {rate:.0f} docs/s | "
-                  f"{elapsed:.0f}s elapsed", flush=True)
+            print(f"  {cursor['next_row']:,}/{total_rows:,} rows | "
+                  f"{cursor['tokens_done']:,} tokens | "
+                  f"{session_docs / elapsed if elapsed > 0 else 0:.0f} docs/s", flush=True)
 
-    completed = cp["next_row"] >= total_rows
-    status = "completed" if completed else "in_progress"
-    flush(conn, occ, docs, cp, status)
-    save_checkpoint(cp)
+    completed = cursor["next_row"] >= total_rows
+    if batch.ndocs or completed:
+        batch.commit(cursor, complete=completed)
 
-    elapsed = time.time() - start
-    print(f"\n{'Done' if completed else 'Stopped'}: {cp['docs_done']:,} docs, "
-          f"{cp['tokens_done']:,} tokens in {elapsed:.0f}s", flush=True)
-
-    rows = conn.execute(
-        """
-        SELECT word, occurrences, documents FROM source_counts
-        WHERE source_id = ? ORDER BY occurrences DESC LIMIT 20
-        """,
-        (SOURCE_ID,),
-    ).fetchall()
-    if rows:
-        print("\nTop 20 by occurrence:")
-        for word, occurrences, documents in rows:
-            print(f"  {word:20s} {occurrences:>10,}  ({documents:,} docs)")
-
+    print(f"\n{'Done' if completed else 'Stopped'}: {cursor['docs_done']:,} docs, "
+          f"{cursor['tokens_done']:,} tokens in {time.time() - start:.0f}s", flush=True)
     conn.close()
     return 0 if (completed or not _shutdown) else 1
 

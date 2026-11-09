@@ -62,6 +62,7 @@ Then: python build/ingest_social.py --calibrate   (re-tune before the real run)
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -216,108 +217,345 @@ def load_checkpoint() -> dict:
 def save_checkpoint(cp: dict) -> None:
     CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
     tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp, indent=2))
+    with tmp.open("w") as fh:
+        fh.write(json.dumps(cp, indent=2))
+        fh.flush()
+        os.fsync(fh.fileno())
     tmp.replace(CHECKPOINT)
 
 
-def compress(ndjson_path: Path, zst_path: Path) -> None:
-    """Compact the append-log into the .zst ingest_social.py reads."""
-    import zstandard
+# ---------------------------------------------------------------------------
+# Errors, fault injection
+# ---------------------------------------------------------------------------
+
+class Unrecoverable(RuntimeError):
+    """Local material is missing or damaged; continuing would lose or invent records.
+
+    Never handled by truncating: the operator must look, restore, or refetch.
+    """
+
+
+def _no_fault(point: str) -> None:
+    return None
+
+
+# Tests replace this to simulate process death between finalization steps.
+FAULT_HOOK = _no_fault
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+# ---------------------------------------------------------------------------
+# Append-log recovery (B4)
+# ---------------------------------------------------------------------------
+
+def rebuild_state_from_file(ndjson_path: Path, key: str) -> tuple[int, float | None, int]:
+    """Derive (count, oldest created_utc, byte length) from the append-log itself.
+
+    A missing or incoherent byte count is *unknown*, not zero. The file is the one
+    thing that cannot disagree with itself, so read the answer off it.
+
+    - A bad **final** line (no newline, or not a JSON object) is a torn write: it is
+      excluded and the returned length stops before it, so the caller trims it.
+    - A bad line **followed by valid records** means the file is damaged. That
+      raises `Unrecoverable` — truncating there would silently discard every later
+      record.
+    - Records without a numeric `created_utc` are counted and reported. If no
+      record has one, `before` cannot be recovered and `Unrecoverable` is raised.
+    """
+    count = 0
+    oldest: float | None = None
+    good_bytes = 0
+    bad_at: int | None = None          # offset of a bad line not yet known to be final
+    no_ts = 0
+    with ndjson_path.open("rb") as fh:
+        offset = 0
+        for raw in fh:
+            start = offset
+            offset += len(raw)
+            rec = None
+            if raw.endswith(b"\n"):
+                try:
+                    rec = json.loads(raw)
+                except (json.JSONDecodeError, ValueError):
+                    rec = None
+            if not isinstance(rec, dict):
+                if bad_at is None:
+                    bad_at = start
+                continue
+            if bad_at is not None:
+                raise Unrecoverable(
+                    f"{key}: {ndjson_path.name} has a damaged line at byte {bad_at:,} "
+                    f"followed by valid records — refusing to truncate them; inspect or "
+                    f"restore the file")
+            ts = rec.get("created_utc")
+            if isinstance(ts, (int, float)) and not isinstance(ts, bool):
+                oldest = ts if oldest is None else min(oldest, ts)
+            else:
+                no_ts += 1
+            count += 1
+            good_bytes = offset
+    if no_ts:
+        print(f"  [{key}] warning: {no_ts:,} record(s) without a numeric created_utc",
+              flush=True)
+    if count and oldest is None:
+        raise Unrecoverable(f"{key}: no record in {ndjson_path.name} has a numeric "
+                            f"created_utc, so the resume point cannot be recovered")
+    print(f"  [{key}] recovered from file: {count:,} records, "
+          f"{good_bytes:,} bytes", flush=True)
+    return count, oldest, good_bytes
+
+
+def _count_lines(path: Path, limit: int | None = None) -> tuple[int, bool]:
+    """(newlines in the first `limit` bytes, whether that prefix ends on a newline)."""
+    n = 0
+    last = b"\n"
+    remaining = limit
+    with path.open("rb") as fh:
+        while remaining is None or remaining > 0:
+            block = fh.read(1 << 22 if remaining is None else min(1 << 22, remaining))
+            if not block:
+                break
+            n += block.count(b"\n")
+            last = block[-1:]
+            if remaining is not None:
+                remaining -= len(block)
+    return n, last == b"\n"
+
+
+def recover_append_log(ndjson_path: Path, state: dict, key: str, cp: dict) -> None:
+    """Make the append-log and the checkpoint agree exactly, or refuse.
+
+    Coherent checkpoint: `bytes` is an int, at most the file size, on a line
+    boundary, and the first `bytes` hold exactly `count` lines. Then anything after
+    `bytes` was written after the last checkpoint and is trimmed (resuming from the
+    unchanged `before` refetches it). Anything else — `bytes` missing, zero with a
+    non-zero count, beyond the end of the file, mid-line, or a line count that
+    disagrees — is incoherent, and the state is rebuilt from the file instead.
+    """
     if not ndjson_path.exists():
+        if state["count"]:
+            raise Unrecoverable(
+                f"{key}: the checkpoint claims {state['count']:,} records but "
+                f"{ndjson_path.name} is missing and the crawl is not finished — restore "
+                f"the append log, or delete this key from the checkpoint to refetch")
+        state["bytes"] = 0
         return
-    data = ndjson_path.read_bytes()
-    if not data:
-        ndjson_path.unlink()
+    size = ndjson_path.stat().st_size
+    if state["count"] == 0:
+        if size:
+            print(f"  [{key}] discarding {size:,} bytes written before any checkpoint",
+                  flush=True)
+            with ndjson_path.open("r+b") as fh:
+                fh.truncate(0)
+        state["bytes"] = 0
         return
-    zst_path.write_bytes(zstandard.ZstdCompressor(level=10).compress(data))
-    ndjson_path.unlink()
+
+    nbytes = state.get("bytes")
+    reason = None
+    if not isinstance(nbytes, int) or isinstance(nbytes, bool):
+        reason = "no byte count"
+    elif nbytes <= 0:
+        reason = f"byte count {nbytes} with {state['count']:,} records"
+    elif nbytes > size:
+        reason = f"byte count {nbytes:,} beyond the end of the file ({size:,})"
+    else:
+        lines, on_boundary = _count_lines(ndjson_path, nbytes)
+        if not on_boundary:
+            reason = f"byte count {nbytes:,} lands mid-line"
+        elif lines != state["count"]:
+            reason = (f"the first {nbytes:,} bytes hold {lines:,} records, "
+                      f"not {state['count']:,}")
+    if reason is None:
+        if size > nbytes:
+            print(f"  [{key}] truncating {size - nbytes:,} unaccounted bytes written after "
+                  f"the last checkpoint (would otherwise duplicate)", flush=True)
+            with ndjson_path.open("r+b") as fh:
+                fh.truncate(nbytes)
+        return
+
+    print(f"  [{key}] incoherent checkpoint ({reason}) — rebuilding from the file", flush=True)
+    count, oldest, good_bytes = rebuild_state_from_file(ndjson_path, key)
+    if count != state["count"]:
+        print(f"  [{key}] checkpoint said {state['count']:,} records, the file holds "
+              f"{count:,} ({count - state['count']:+,}: the unaccounted window)", flush=True)
+    if good_bytes < size:
+        with ndjson_path.open("r+b") as fh:
+            fh.truncate(good_bytes)
+    state["count"] = count
+    if oldest is not None:
+        state["before"] = oldest
+    state["bytes"] = good_bytes
+    save_checkpoint(cp)
+
+
+# ---------------------------------------------------------------------------
+# Finalization (brief B7 Phase 2)
+# ---------------------------------------------------------------------------
+
+def _scan_zst(zst_path: Path) -> tuple[int, str]:
+    """(records, sha256 of the decompressed content), streamed."""
+    import zstandard
+    h = hashlib.sha256()
+    n = 0
+    with zst_path.open("rb") as fh:
+        reader = zstandard.ZstdDecompressor(max_window_size=2 ** 31).stream_reader(fh)
+        for block in iter(lambda: reader.read(1 << 22), b""):
+            h.update(block)
+            n += block.count(b"\n")
+    return n, h.hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def compress_verified(ndjson_path: Path, zst_path: Path) -> dict:
+    """Stream the append-log into `<zst>.tmp`, verify it, then replace `zst_path`.
+
+    Never reads the whole log into memory. Returns the archive identity.
+    """
+    import zstandard
+    tmp = zst_path.with_name(zst_path.name + ".tmp")
+    h = hashlib.sha256()
+    records = 0
+    try:
+        with ndjson_path.open("rb") as src, tmp.open("wb") as dst:
+            with zstandard.ZstdCompressor(level=10).stream_writer(dst, closefd=False) as w:
+                for block in iter(lambda: src.read(1 << 22), b""):
+                    h.update(block)
+                    records += block.count(b"\n")
+                    w.write(block)
+            dst.flush()
+            os.fsync(dst.fileno())
+        FAULT_HOOK("compressed")
+        got_records, got_sha = _scan_zst(tmp)
+        if (got_records, got_sha) != (records, h.hexdigest()):
+            raise Unrecoverable(f"{tmp.name} does not decompress to {ndjson_path.name}")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, zst_path)
+    _fsync_dir(zst_path.parent)
+    return {"records": records, "content_sha256": h.hexdigest(),
+            "sha256": _file_sha256(zst_path), "size": zst_path.stat().st_size}
+
+
+def finalize(key: str, state: dict, cp: dict, ndjson_path: Path, zst_path: Path) -> None:
+    """Turn an exhausted crawl into a verified `.zst`, recoverably.
+
+    Steps: (1) the append log is durable and matches the checkpoint; (2) history
+    exhaustion is `state["done"]`, recorded separately; (3) stream-compress to a
+    temporary file; (4) verify record count and content, then replace atomically;
+    (5) record the archive identity in `state["finalized"]` — only then is the
+    append log removed. A restart at any point repeats or completes the remaining
+    steps. A valid archive with no log (the archives made before this existed) is
+    verified and kept.
+    """
+    tmp = zst_path.with_name(zst_path.name + ".tmp")
+    tmp.unlink(missing_ok=True)                       # a crash during step 3
+    fin = state.get("finalized")
+    if fin and zst_path.exists() and _file_sha256(zst_path) == fin["sha256"]:
+        if ndjson_path.exists():
+            ndjson_path.unlink()                      # a crash between steps 5 and removal
+        print(f"  [{key}] already complete ({state['count']:,} records, verified archive)",
+              flush=True)
+        return
+    if ndjson_path.exists():
+        recover_append_log(ndjson_path, state, key, cp)
+        identity = compress_verified(ndjson_path, zst_path)
+        if identity["records"] != state["count"]:
+            raise Unrecoverable(f"{key}: archive holds {identity['records']:,} records, "
+                                f"checkpoint {state['count']:,}")
+        FAULT_HOOK("replaced")
+    elif zst_path.exists():
+        records, content = _scan_zst(zst_path)
+        if records != state["count"]:
+            raise Unrecoverable(
+                f"{key}: {zst_path.name} holds {records:,} records but the checkpoint "
+                f"claims {state['count']:,}, and there is no append log to rebuild from")
+        identity = {"records": records, "content_sha256": content,
+                    "sha256": _file_sha256(zst_path), "size": zst_path.stat().st_size}
+    else:
+        raise Unrecoverable(f"{key}: history is exhausted but neither {ndjson_path.name} "
+                            f"nor {zst_path.name} exists — the records must be refetched")
+    state["finalized"] = identity
+    state["bytes"] = 0
+    save_checkpoint(cp)
+    FAULT_HOOK("recorded")
+    ndjson_path.unlink(missing_ok=True)
+    print(f"  [{key}] wrote {zst_path.name} ({identity['records']:,} records, verified)",
+          flush=True)
+
+
+def _restore_log_from_archive(key: str, state: dict, ndjson_path: Path, zst_path: Path) -> None:
+    """An unfinished crawl compacted by an older version (`--max-records`).
+
+    Decompress the archive back into the append log, if it holds exactly the
+    checkpointed records, so the crawl continues without losing its prefix.
+    """
+    import zstandard
+    records, _ = _scan_zst(zst_path)
+    if records != state["count"]:
+        raise Unrecoverable(
+            f"{key}: unfinished crawl has an archive of {records:,} records but the "
+            f"checkpoint claims {state['count']:,} — cannot tell which prefix is real")
+    tmp = ndjson_path.with_name(ndjson_path.name + ".restore")
+    with zst_path.open("rb") as src, tmp.open("wb") as dst:
+        zstandard.ZstdDecompressor(max_window_size=2 ** 31).copy_stream(src, dst)
+        dst.flush()
+        os.fsync(dst.fileno())
+    os.replace(tmp, ndjson_path)
+    state["bytes"] = ndjson_path.stat().st_size
+    print(f"  [{key}] restored {records:,} records from {zst_path.name} into the append log",
+          flush=True)
 
 
 # ---------------------------------------------------------------------------
 # Fetch one subreddit
 # ---------------------------------------------------------------------------
 
-def rebuild_state_from_file(ndjson_path: Path, key: str) -> tuple[int, float | None, int]:
-    """Derive (count, oldest created_utc, byte length) from the append-log itself.
-
-    Needed when a checkpoint predates the `bytes` field (written by a version
-    before that existed) or is otherwise missing it. The temptation is to let
-    `bytes` default to 0, but then the resume check below sees the whole file as
-    "unaccounted" and truncates every record away while `before` stays put --
-    silently losing the span between `before` and now, which is never refetched.
-
-    A missing byte count is *unknown*, not zero. The file is the one thing that
-    cannot disagree with itself, so read the answer off it: scan complete lines
-    only, return the oldest timestamp seen, and report the offset of the last
-    complete line so a partial final write can be trimmed rather than parsed.
-    """
-    count = 0
-    oldest: float | None = None
-    good_bytes = 0
-    with ndjson_path.open("rb") as fh:
-        offset = 0
-        for raw in fh:
-            offset += len(raw)
-            if not raw.endswith(b"\n"):
-                break                      # torn final write; not a record yet
-            try:
-                rec = json.loads(raw)
-            except (json.JSONDecodeError, ValueError):
-                break
-            ts = rec.get("created_utc")
-            if isinstance(ts, (int, float)):
-                oldest = ts if oldest is None else min(oldest, ts)
-            count += 1
-            good_bytes = offset
-    print(f"  [{key}] recovered from file: {count:,} records, "
-          f"{good_bytes:,} bytes", flush=True)
-    return count, oldest, good_bytes
-
-
 def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
-    """Page back through one subreddit's history. Returns records written."""
+    """Page back through one subreddit's history. Returns records written.
+
+    An unfinished crawl keeps its append log; it is compressed only once history is
+    exhausted (`finalize`). `--max-records` stops early and leaves the crawl
+    resumable with its whole prefix.
+    """
     key = f"{subreddit}/{kind}"
     state = cp.setdefault(key, {"before": None, "count": 0, "done": False, "bytes": 0})
-    if state["done"]:
-        print(f"  [{key}] already complete ({state['count']:,} records)", flush=True)
-        return 0
-
     fields = COMMENT_FIELDS if kind == "comments" else SUBMISSION_FIELDS
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     ndjson_path = RAW_DIR / f"{subreddit}_{kind}.ndjson"
     zst_path    = RAW_DIR / f"{subreddit}_{kind}.zst"
 
-    if state["count"] == 0 and ndjson_path.exists():
-        ndjson_path.unlink()          # stale partial from a discarded run
-    elif "bytes" not in state and ndjson_path.exists():
-        # Checkpoint from before `bytes` was tracked. Rebuild count/before/bytes
-        # off the file rather than defaulting bytes to 0, which would truncate
-        # the whole append-log away. See rebuild_state_from_file().
-        count, oldest, good_bytes = rebuild_state_from_file(ndjson_path, key)
-        if good_bytes < ndjson_path.stat().st_size:
-            with ndjson_path.open("r+b") as trunc:
-                trunc.truncate(good_bytes)
-        state["count"] = count
-        if oldest is not None:
-            # Resume strictly older than the oldest record actually on disk, not
-            # the stale `before`, which here is newer than the file's own tail
-            # and would refetch the difference.
-            state["before"] = oldest
-        state["bytes"] = good_bytes
+    if state["done"]:
+        finalize(key, state, cp, ndjson_path, zst_path)
+        return 0
+
+    if zst_path.exists():
+        if ndjson_path.exists():
+            raise Unrecoverable(f"{key}: unfinished crawl has both {ndjson_path.name} and "
+                                f"{zst_path.name}; refusing to guess which one is current")
+        _restore_log_from_archive(key, state, ndjson_path, zst_path)
+        zst_path.unlink()
         save_checkpoint(cp)
-    elif ndjson_path.exists() and ndjson_path.stat().st_size > state.get("bytes", 0):
-        # Records written after the last checkpoint but before the process
-        # died. `before` was never advanced past them, so resuming would fetch
-        # and append them a second time. Truncate back to the checkpointed
-        # size so the file and the checkpoint agree exactly. Without this a
-        # kill costs up to one checkpoint interval of duplicated records, and
-        # duplicates inflate occurrence counts silently -- the one thing a
-        # frequency table cannot tolerate quietly.
-        extra = ndjson_path.stat().st_size - state["bytes"]
-        print(f"  [{key}] truncating {extra:,} unaccounted bytes written after "
-              f"the last checkpoint (would otherwise duplicate)", flush=True)
-        with ndjson_path.open("r+b") as trunc:
-            trunc.truncate(state["bytes"])
+    recover_append_log(ndjson_path, state, key, cp)
 
     written = 0
     start = time.time()
@@ -326,7 +564,8 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
     try:
         while not _shutdown:
             if max_records is not None and state["count"] >= max_records:
-                print(f"  [{key}] reached --max-records {max_records:,}", flush=True)
+                print(f"  [{key}] reached --max-records {max_records:,} — crawl left "
+                      f"resumable, not compressed", flush=True)
                 break
             try:
                 batch = get_page(kind, subreddit, state["before"])
@@ -384,15 +623,16 @@ def fetch(subreddit: str, kind: str, cp: dict, max_records: int | None) -> int:
                       f"{rate:,.0f}/h", flush=True)
             time.sleep(PAGE_DELAY)
     finally:
+        # Step 1 of finalization, and every stop: the log is durable and the
+        # checkpoint's byte count is its exact size.
         fh.flush()
         os.fsync(fh.fileno())
         fh.close()
         state["bytes"] = ndjson_path.stat().st_size if ndjson_path.exists() else 0
         save_checkpoint(cp)
 
-    if state["done"] or (max_records is not None and state["count"] >= max_records):
-        compress(ndjson_path, zst_path)
-        print(f"  [{key}] wrote {zst_path.name}", flush=True)
+    if state["done"] and not _shutdown:
+        finalize(key, state, cp, ndjson_path, zst_path)
     return written
 
 
@@ -457,11 +697,15 @@ def main() -> int:
             except FetchStalled as exc:
                 # One wedged subreddit must not block the other fourteen.
                 stalled.append(str(exc))
+            except Unrecoverable as exc:
+                print(f"  UNRECOVERABLE: {exc}", flush=True)
+                stalled.append(f"UNRECOVERABLE {exc}")
         if _shutdown:
             break
 
     save_checkpoint(cp)
-    done = all(cp.get(f"{s}/{k}", {}).get("done") for s in subs for k in kinds)
+    done = all(cp.get(f"{s}/{k}", {}).get("done") and cp.get(f"{s}/{k}", {}).get("finalized")
+               for s in subs for k in kinds)
     grand = sum(v["count"] for v in cp.values())
     print(f"\n{total:,} records this run, {grand:,} total on disk, "
           f"{(time.time()-t0)/60:.1f}m", flush=True)

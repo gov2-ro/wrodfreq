@@ -1,53 +1,82 @@
 #!/usr/bin/env python3
-"""Stage 6 — the CI validation gate (spec §11). Must fail the build on a regression.
+"""Stage 6 — the read-only validation gate (spec §11, ADR-006, brief B7 Phase 5).
 
-All six spec checks:
+This stage **never writes** to what it inspects. It opens the database with
+`mode=ro` (SQLite TEMP tables for joins only), applies no schema, rebuilds no
+table, and touches no artifact. A missing database is an error, not a new file.
+Rebuild-and-compare lives in `build/check_rebuild.py`; an earlier version of this
+script rebuilt stages 2-5 in place as its "check 6" and so validated tables it had
+just rewritten (finding A02).
 
-  1. Function words land in Zipf 6.0-8.0 (ADR-003, see below) — the
-     check that catches a broken denominator (spec §3.2). Runs against
-     `merged` once it exists, per-source `source_zipf` before that.
-  2. Agreement with `wordfreq`'s Romanian list, over words it covers at
-     Zipf >= 3: pairwise concordance where wordfreq's own two values differ
-     by >= 0.3 Zipf. Spec §11.2 originally named Spearman rho > 0.9; that
-     was re-specified 2026-09-17 after measuring that rho against this
-     reference scores the reference's tie structure rather than our table —
-     see CONCORDANCE_MIN. Rho is still printed, ungated. Skipped (not
-     failed) if wordfreq isn't reachable.
-  3. ~50 hand-written monotone pairs where the ordering isn't in doubt.
-  4. >=95% of DEX lemmas with frequency > 0.5 must appear in `merged`.
-     Skipped (not failed) if the DEX db isn't reachable.
-  5. Per-source disagreement report — not pass/fail, a printed top-100 by
-     `spread`, for a human to read.
-  6. Idempotence — re-running stages 2-5 (compute_zipf, merge,
-     build_lemma_layer, build_package) on unchanged `source_counts` must
-     produce byte-identical output at every stage.
+Checks, each `pass`, `fail` or `skip` in the JSON report:
 
-Checks 2 and 4 both cross-reference oțios's environment at build time (its
-installed `wordfreq` package, its vendored `inflected_forms.db`) — this is
-the same precedent `merge.py`/`build_lemma_layer.py` already established:
-"never import from oțios at runtime" is about the *shipped wrodfreq
-package*, not this build-time validation script.
+  integrity      raw conservation and every structural/derived invariant
+                 (build/integrity.py), plus the logical hash of each source's counts
+  provenance     the database is the state the build manifest names: panel,
+                 generations, sequences, totals, stage runs, count hashes
+  function_words de, și, la, un, cu in Zipf 6.0-8.0 (ADR-003) — the denominator check
+  wordfreq       pairwise concordance >= CONCORDANCE_MIN against wordfreq's Romanian
+                 where it separates two words by >= CONCORDANCE_MIN_DELTA, and
+                 >= WORDFREQ_COVERAGE_MIN of its Zipf>=3 words present
+  monotone_pairs all hand-written pairs comparable and ordered
+  dex_coverage   >= DEX_COVERAGE_MIN of DEX lemmas with frequency >= 0.80 present
+  lemma          matched-panel invariants; layer present iff the manifest says so;
+                 the DEX map is the one the manifest names
+  artifacts      every file named by the result manifest exists with its hash;
+                 headers carry the build id/panel/scale; arrays are complete; the
+                 shipped words and quantized values equal the database's; the
+                 by-source and lemma files match; the TSV has the same rows
+
+`--strict` turns every skip (missing reference, missing generation) into a failure,
+and hashes the database and the generation before and after to prove nothing
+changed. Only a strict report with every check passed and a non-synthetic build is
+`release_eligible`. `--skip CHECK` (developer use) is recorded in the report and
+makes it ineligible.
+
+Sealed legacy sources pass against the logical hash of their retained counts.
+That verifies the counts and everything derived from them; it does not prove a
+fresh reconstruction from raw corpora, and the report says so.
+
+Usage:
+    python build/validate.py --db PATH --generation DIR --strict --report OUT.json
+    python build/validate.py --db PATH                       # quick, non-strict
 """
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import importlib.util
 import json
-import subprocess
+import lzma
 import sqlite3
+import statistics
+import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import msgpack
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect, eligible_sources
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import integrity
+from build_manifest import MAX_HYPHENS, ZIPF_SCALE, load_manifest
+from build_package import (BY_SOURCE_FILENAME, INPUTS_FILENAME, LEMMA_FILENAME,
+                           RESULT_FILENAME, SURFACE_FILENAME, TSV_FILENAME, PackageRefused,
+                           check_db_matches, sha256_file, verify_generation, words_sha256)
+from ingest_state import canonical, sha256_text
+from wrodfreq.db import connect_readonly
 from wrodfreq.tokenizer import normalize, tokenize
 
-from compute_zipf import compute_all
-from merge import DEFAULT_DEX_DB, load_dex_forms, run_merge
-from build_lemma_layer import load_form_lemma, run as run_lemma_layer
-from build_package import build_payloads
+DEFAULT_DEX_DB = Path.home() / "devbox/otios/data/processed/inflected_forms.db"
+WORDFREQ_COVERAGE_MIN = 0.99   # audit baseline 43,095 / 43,413 = 99.27%
+CHECKS = ["integrity", "provenance", "function_words", "wordfreq", "monotone_pairs",
+          "dex_coverage", "lemma", "artifacts"]
 
 FUNCTION_WORDS = ["de", "și", "la", "un", "cu"]
 ZIPF_LOW, ZIPF_HIGH = 6.0, 7.5
@@ -131,107 +160,92 @@ MONOTONE_PAIRS = [
 ]
 
 
-def _fetch_merged_zipf(conn: sqlite3.Connection, words: list[str]) -> dict[str, float]:
-    """{word: zipf} for `merged`, restricted to `words`.
 
-    A plain `WHERE word IN (...)` with tens of thousands of placeholders
-    risks SQLite's variable-count limit on stricter builds (the default is
-    999 unless overridden). A temp table + `CROSS JOIN` avoids that and is
-    also faster — same reasoning as build_lemma_layer.py's DEX-forms lookup,
-    `CROSS JOIN` forces the small `_words` table to drive instead of
-    scanning all of `merged`.
-    """
-    conn.execute("DROP TABLE IF EXISTS _words")
+
+class Check:
+    """One check's outcome; `fail()`/`skip()` keep the first reason as `detail`."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.status = "pass"
+        self.detail: dict = {}
+        self.messages: list[str] = []
+
+    def fail(self, msg: str) -> None:
+        self.status = "fail"
+        self.messages.append(msg)
+        print(f"  FAIL {msg}", flush=True)
+
+    def skip(self, msg: str) -> None:
+        if self.status == "pass":
+            self.status = "skip"
+        self.messages.append(msg)
+        print(f"  SKIP {msg}", flush=True)
+
+    def info(self, msg: str) -> None:
+        self.messages.append(msg)
+        print(f"  {msg}", flush=True)
+
+    def to_json(self) -> dict:
+        return {"status": self.status, "messages": self.messages, "detail": self.detail}
+
+
+def _fetch_merged_zipf(conn: sqlite3.Connection, words: list[str]) -> dict[str, float]:
+    """{word: zipf} for `merged`, restricted to `words` (TEMP table + CROSS JOIN)."""
+    conn.execute("DROP TABLE IF EXISTS temp._words")
     conn.execute("CREATE TEMP TABLE _words (word TEXT PRIMARY KEY)")
-    conn.executemany(
-        "INSERT OR IGNORE INTO _words VALUES (?)", [(w,) for w in words]
-    )
+    conn.executemany("INSERT OR IGNORE INTO temp._words VALUES (?)", [(w,) for w in words])
     rows = conn.execute(
-        "SELECT m.word, m.zipf FROM _words w CROSS JOIN merged m ON m.word = w.word"
+        "SELECT m.word, m.zipf FROM temp._words w CROSS JOIN merged m ON m.word = w.word"
     ).fetchall()
-    conn.execute("DROP TABLE IF EXISTS _words")
+    conn.execute("DROP TABLE temp._words")
     return dict(rows)
 
 
 # ---------------------------------------------------------------------------
-# Check 1 — function words
+# Quality checks
 # ---------------------------------------------------------------------------
 
-def check_function_words(conn: sqlite3.Connection) -> bool:
-    """Check 1: de, și, la, un, cu must fall in Zipf 6.0-ZIPF_HIGH_ADJUSTED."""
-    print(f"[1] function words in Zipf {ZIPF_LOW}-{ZIPF_HIGH_ADJUSTED} (ADR-003)")
-
-    (merged_count,) = conn.execute("SELECT COUNT(*) FROM merged").fetchone()
-    if merged_count:
-        placeholders = ",".join("?" * len(FUNCTION_WORDS))
-        rows = conn.execute(
-            f"SELECT word, zipf FROM merged WHERE word IN ({placeholders})",
-            FUNCTION_WORDS,
-        ).fetchall()
-        return _report(rows, "merged", ZIPF_HIGH_ADJUSTED)
-
-    source_ids = [r[0] for r in conn.execute(
-        "SELECT source_id FROM sources WHERE status != 'rejected'"
-    ).fetchall()]
-    if not source_ids:
-        print("  FAIL — no sources ingested yet")
-        return False
-
-    ok = True
-    for source_id in source_ids:
-        placeholders = ",".join("?" * len(FUNCTION_WORDS))
-        rows = conn.execute(
-            f"""SELECT word, zipf FROM source_zipf
-                WHERE source_id = ? AND reliable = 1 AND word IN ({placeholders})""",
-            [source_id, *FUNCTION_WORDS],
-        ).fetchall()
-        ok = _report(rows, source_id, ZIPF_HIGH_ADJUSTED) and ok
-    return ok
-
-
-def _report(rows: list[tuple[str, float]], label: str, zipf_high: float) -> bool:
-    found = dict(rows)
-    ok = True
+def check_function_words(conn, c: Check) -> None:
+    placeholders = ",".join("?" * len(FUNCTION_WORDS))
+    found = dict(conn.execute(f"SELECT word, zipf FROM merged WHERE word IN ({placeholders})",
+                              FUNCTION_WORDS).fetchall())
+    c.detail = {w: found.get(w) for w in FUNCTION_WORDS}
     for word in FUNCTION_WORDS:
-        zipf = found.get(word)
-        if zipf is None:
-            print(f"  [{label}] {word:6s} MISSING (not reliable or not ingested)")
-            ok = False
-        elif not (ZIPF_LOW <= zipf <= zipf_high):
-            print(f"  [{label}] {word:6s} {zipf:.2f}  OUT OF RANGE "
-                  f"({ZIPF_LOW}-{zipf_high}) — denominator is probably wrong")
-            ok = False
+        z = found.get(word)
+        if z is None:
+            c.fail(f"{word} missing from merged — denominator or panel broken")
+        elif not (ZIPF_LOW <= z <= ZIPF_HIGH_ADJUSTED):
+            c.fail(f"{word} at {z:.2f}, outside {ZIPF_LOW}-{ZIPF_HIGH_ADJUSTED} — the "
+                   f"denominator is probably wrong")
         else:
-            print(f"  [{label}] {word:6s} {zipf:.2f}  ok")
-    return ok
+            c.info(f"{word:4s} {z:.2f} ok")
 
 
-# ---------------------------------------------------------------------------
-# Check 2 — rank correlation vs wordfreq
-# ---------------------------------------------------------------------------
-
-def load_wordfreq_ro(python_path: Path) -> dict[str, float] | None:
-    """{word: zipf} for wordfreq's Romanian list, via oțios's venv (build-time
-    cross-reference only — wordfreq is not a dependency of wrodfreq itself)."""
+def load_wordfreq_ro(python_path: Path) -> tuple[dict[str, float], dict] | None:
+    """({word: zipf}, reference identity) for wordfreq's Romanian list, run in another
+    interpreter (build-time cross-reference only; wordfreq is not our dependency)."""
     if not python_path.exists():
         return None
     script = (
-        "import json, wordfreq\n"
+        "import json, importlib.metadata, wordfreq\n"
         "words = list(wordfreq.iter_wordlist('ro'))\n"
-        "print(json.dumps({w: wordfreq.zipf_frequency(w, 'ro') for w in words}))\n"
+        "print(json.dumps({'version': importlib.metadata.version('wordfreq'),\n"
+        "                  'words': {w: wordfreq.zipf_frequency(w, 'ro') for w in words}}))\n"
     )
     try:
-        result = subprocess.run(
-            [str(python_path), "-c", script],
-            capture_output=True, text=True, timeout=120,
-        )
+        result = subprocess.run([str(python_path), "-c", script],
+                                capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"  wordfreq subprocess failed: {exc}")
         return None
     if result.returncode != 0:
         print(f"  wordfreq subprocess failed: {result.stderr[:500]}")
         return None
-    return json.loads(result.stdout)
+    data = json.loads(result.stdout)
+    words = data["words"]
+    return words, {"package": "wordfreq", "version": data["version"], "words": len(words),
+                   "sha256": sha256_text(canonical(words))}
 
 
 def _concordance(pairs: list[tuple[float, float]], min_delta: float) -> tuple[int, int, int]:
@@ -285,107 +299,95 @@ def _concordance(pairs: list[tuple[float, float]], min_delta: float) -> tuple[in
     return concordant, discordant, tied
 
 
-def check_wordfreq_agreement(conn: sqlite3.Connection, wordfreq_python: Path) -> bool | None:
-    """Check 2: agreement with `wordfreq`'s Romanian list, over the pairs
-    wordfreq actually separates (spec §11.2).
+def _spearman(x: list[float], y: list[float]) -> float:
+    """Spearman's rho (average ranks for ties); `method="ranked"` needs Python 3.12."""
+    try:
+        return statistics.correlation(x, y, method="ranked")
+    except TypeError:
+        def ranks(v):
+            order = sorted(range(len(v)), key=v.__getitem__)
+            out = [0.0] * len(v)
+            i = 0
+            while i < len(order):
+                j = i
+                while j + 1 < len(order) and v[order[j + 1]] == v[order[i]]:
+                    j += 1
+                for k in range(i, j + 1):
+                    out[order[k]] = (i + j) / 2 + 1
+                i = j + 1
+            return out
+        return statistics.correlation(ranks(x), ranks(y))
 
-    Scores conditional pairwise concordance rather than Spearman rho — see
-    CONCORDANCE_MIN's comment for the measurement behind that choice. Raw rho
-    is still printed, ungated, because it is the number the spec used to name
-    and it is worth watching drift on.
 
-    Returns None (skip, not fail) if wordfreq isn't reachable — this check
-    validates against an external reference, it doesn't gate on that
-    reference's availability.
+def check_wordfreq(conn, c: Check, wordfreq_python: Path) -> dict | None:
+    """Concordance (gated) and coverage (gated) against wordfreq's Romanian list.
+
+    Rho, Pearson and the median offset are printed, not gated — see
+    CONCORDANCE_MIN's comment for the measurement behind that choice.
     """
-    print(f"[2] agreement vs wordfreq "
-          f"(concordance >= {CONCORDANCE_MIN:.0%} where |delta wordfreq| >= {CONCORDANCE_MIN_DELTA})")
-    wf = load_wordfreq_ro(wordfreq_python)
-    if wf is None:
-        print(f"  SKIPPED — wordfreq not reachable at {wordfreq_python}")
+    loaded = load_wordfreq_ro(wordfreq_python)
+    if loaded is None:
+        c.skip(f"wordfreq not reachable at {wordfreq_python}")
         return None
-
-    candidates = [w for w, z in wf.items() if z >= WORDFREQ_MIN_ZIPF]
+    wf, identity = loaded
+    candidates = sorted(w for w, z in wf.items() if z >= WORDFREQ_MIN_ZIPF)
     ours = _fetch_merged_zipf(conn, candidates)
-
     common = [w for w in candidates if w in ours]
+    coverage = len(common) / len(candidates) if candidates else 0.0
+    c.detail.update(reference=identity, candidates=len(candidates), present=len(common),
+                    coverage=coverage)
+    if coverage < WORDFREQ_COVERAGE_MIN:
+        c.fail(f"coverage {len(common):,}/{len(candidates):,} = {coverage:.2%} of wordfreq's "
+               f"Zipf>={WORDFREQ_MIN_ZIPF} words, below {WORDFREQ_COVERAGE_MIN:.0%}")
+    else:
+        c.info(f"coverage {len(common):,}/{len(candidates):,} = {coverage:.2%} ok")
     if len(common) < 10:
-        print(f"  SKIPPED — only {len(common)} words in common with wordfreq's "
-              f"Zipf>={WORDFREQ_MIN_ZIPF} list, too few to compare")
-        return None
-
-    import statistics
-    wf_zipfs = [wf[w] for w in common]
-    our_zipfs = [ours[w] for w in common]
-
-    concordant, discordant, tied = _concordance(
-        list(zip(wf_zipfs, our_zipfs)), CONCORDANCE_MIN_DELTA)
+        c.fail("fewer than 10 words in common — nothing to compare")
+        return identity
+    wf_z = [wf[w] for w in common]
+    our_z = [ours[w] for w in common]
+    concordant, discordant, tied = _concordance(list(zip(wf_z, our_z)), CONCORDANCE_MIN_DELTA)
     scored = concordant + discordant + tied
     if scored == 0:
-        print("  SKIPPED — no word pairs separated by "
-              f"{CONCORDANCE_MIN_DELTA} Zipf to score")
-        return None
+        c.fail(f"no pair separated by {CONCORDANCE_MIN_DELTA} Zipf to score")
+        return identity
     concordance = concordant / scored
-
-    rho = statistics.correlation(wf_zipfs, our_zipfs, method="ranked")
-    pearson = statistics.correlation(wf_zipfs, our_zipfs)
-    deltas = sorted(o - w for o, w in zip(our_zipfs, wf_zipfs))
-    median_delta = statistics.median(deltas)
-    iqr = deltas[3 * len(deltas) // 4] - deltas[len(deltas) // 4]
-
-    ok = concordance >= CONCORDANCE_MIN
-    print(f"  {len(common):,}/{len(candidates):,} wordfreq words (Zipf>={WORDFREQ_MIN_ZIPF}) "
-          f"found in merged")
-    print(f"  concordance = {concordance:.3f} over {scored:,} separated pairs  "
-          f"{'ok' if ok else f'FAIL — below {CONCORDANCE_MIN:.0%}'}")
-    print(f"  (context, not gated: Spearman rho = {rho:.3f}, Pearson = {pearson:.3f}, "
-          f"ours-wordfreq median = {median_delta:+.2f}, IQR = {iqr:.2f})")
-    if not ok:
-        print("  we are ordering words differently from wordfreq even where wordfreq")
-        print("  separates them clearly — that is a tokenizer or normalisation")
-        print("  divergence, not a discovery. Check the elision/hyphen rules first.")
-    return ok
+    deltas = sorted(o - w for o, w in zip(our_z, wf_z))
+    c.detail.update(concordance=concordance, scored_pairs=scored,
+                    spearman=_spearman(wf_z, our_z),
+                    pearson=statistics.correlation(wf_z, our_z),
+                    median_delta=statistics.median(deltas),
+                    iqr=deltas[3 * len(deltas) // 4] - deltas[len(deltas) // 4])
+    if concordance < CONCORDANCE_MIN:
+        c.fail(f"concordance {concordance:.3f} over {scored:,} pairs, below {CONCORDANCE_MIN}")
+    else:
+        c.info(f"concordance {concordance:.3f} over {scored:,} separated pairs ok "
+               f"(rho {c.detail['spearman']:.3f}, Pearson {c.detail['pearson']:.3f}, "
+               f"median {c.detail['median_delta']:+.2f}, IQR {c.detail['iqr']:.2f})")
+    return identity
 
 
-# ---------------------------------------------------------------------------
-# Check 3 — monotone sanity pairs
-# ---------------------------------------------------------------------------
-
-def check_monotone_pairs(conn: sqlite3.Connection) -> bool:
-    """Check 3: hand-written pairs where the frequency ordering isn't in doubt."""
-    print(f"[3] monotone sanity pairs ({len(MONOTONE_PAIRS)} pairs)")
-    words = list({w for pair in MONOTONE_PAIRS for w in pair})
-    zipfs = _fetch_merged_zipf(conn, words)
-
-    inverted = []
-    missing = []
-    for common, rare in MONOTONE_PAIRS:
-        zc, zr = zipfs.get(common), zipfs.get(rare)
-        if zc is None or zr is None:
-            missing.append((common, rare))
-        elif zc <= zr:
-            inverted.append((common, rare, zc, zr))
-
-    for common, rare, zc, zr in inverted:
-        print(f"  INVERTED: {common} ({zc:.2f}) <= {rare} ({zr:.2f}) — merge inverted this pair")
+def check_monotone_pairs(conn, c: Check, strict: bool) -> None:
+    words = sorted({w for pair in MONOTONE_PAIRS for w in pair})
+    z = _fetch_merged_zipf(conn, words)
+    missing = [(a, b) for a, b in MONOTONE_PAIRS if a not in z or b not in z]
+    inverted = [(a, b, z[a], z[b]) for a, b in MONOTONE_PAIRS
+                if a in z and b in z and z[a] <= z[b]]
+    c.detail = {"pairs": len(MONOTONE_PAIRS), "missing": missing, "inverted": inverted}
+    for a, b, za, zb in inverted:
+        c.fail(f"inverted: {a} ({za:.2f}) <= {b} ({zb:.2f})")
     if missing:
-        print(f"  {len(missing)} pairs skipped (one or both words not in merged): "
-              f"{', '.join(f'{c}/{r}' for c, r in missing[:10])}"
-              f"{' ...' if len(missing) > 10 else ''}")
-
-    checked = len(MONOTONE_PAIRS) - len(missing)
-    ok = not inverted
-    print(f"  {checked - len(inverted)}/{checked} comparable pairs correctly ordered  "
-          f"{'ok' if ok else 'FAIL'}")
-    return ok
+        msg = f"{len(missing)} pair(s) not comparable: {missing[:10]}"
+        if strict:
+            c.fail(msg)
+        else:
+            c.skip(msg)
+    if not inverted and not missing:
+        c.info(f"{len(MONOTONE_PAIRS)}/{len(MONOTONE_PAIRS)} pairs comparable and ordered")
 
 
-# ---------------------------------------------------------------------------
-# Check 4 — DEX lemma coverage
-# ---------------------------------------------------------------------------
-
-def check_dex_coverage(conn: sqlite3.Connection, dex_db_path: Path) -> bool | None:
-    """Check 4: >=95% of DEX lemmas with frequency >= 0.80 must appear in `merged`.
+def check_dex_coverage(conn, c: Check, dex_db_path: Path) -> None:
+    """>=95% of DEX lemmas with frequency >= 0.80 must appear in `merged`.
 
     Spec §11.4 says "frequency > 0.5", and that's what shipped originally —
     it failed at 85.1%/85.2% (see docs/BACKLOG.md, 2026-09-08), investigated
@@ -412,181 +414,373 @@ def check_dex_coverage(conn: sqlite3.Connection, dex_db_path: Path) -> bool | No
     numbers like 0.99, so a LIMIT N cut arbitrarily through a tied group;
     thresholding avoids that artifact entirely.
     """
-    print(f"[4] DEX lemma coverage (>={DEX_COVERAGE_MIN:.0%} of lemmas with "
-          f"frequency >= {DEX_LEXEME_MIN_FREQ} must appear in merged)")
     if not dex_db_path.exists():
-        print(f"  SKIPPED — DEX db not found at {dex_db_path}")
-        return None
-
-    dex_conn = sqlite3.connect(dex_db_path)
-    all_lemmas = {
-        row[0] for row in dex_conn.execute(
-            "SELECT DISTINCT lemma FROM lexeme WHERE frequency >= ?",
-            (DEX_LEXEME_MIN_FREQ,),
-        )
-    }
-    dex_conn.close()
-
-    # A handful of DEX headwords (found 2026-09-08: 118 of 121,895, e.g.
-    # abbreviations like "acad.", Latin binomials like "acanthus longifolius",
-    # foreign-diacritic loanwords like "müsli") can never match the
-    # tokenizer's letters-only pattern no matter how good the corpus panel
-    # is. Excluding them makes this a measure of coverage among lemmas this
-    # pipeline could possibly reach — it doesn't meaningfully move the number
-    # (still well short of 95% after M4/M5), but including unreachable
-    # entries in the denominator isn't honest signal about a "vocabulary
-    # filter crept back in" (spec §3.1). Reachability is checked via the
-    # real tokenizer (not a duplicated regex — CLAUDE.md: "the tokenizer
-    # lives in exactly one module"): a lemma is reachable iff tokenizing it
-    # alone yields exactly itself back as one token.
+        c.skip(f"DEX db not found at {dex_db_path}")
+        return
+    dex = sqlite3.connect(f"file:{dex_db_path.resolve()}?mode=ro", uri=True)
+    all_lemmas = {r[0] for r in dex.execute(
+        "SELECT DISTINCT lemma FROM lexeme WHERE frequency >= ?", (DEX_LEXEME_MIN_FREQ,))}
+    dex.close()
+    # Only lemmas the tokenizer can reach as one token (abbreviations, binomials and
+    # foreign-diacritic loanwords cannot appear in `merged` whatever the panel).
     lemmas = sorted(w for w in all_lemmas if tokenize(w) == [normalize(w)])
-    skipped = len(all_lemmas) - len(lemmas)
-    if skipped:
-        print(f"  ({skipped} of {len(all_lemmas)} DEX lemmas excluded — not a single "
-              f"tokenizer-reachable word, e.g. abbreviations or foreign loanwords)")
-
     present = set(_fetch_merged_zipf(conn, lemmas))
-
     coverage = len(present) / len(lemmas) if lemmas else 0.0
-    ok = coverage >= DEX_COVERAGE_MIN
-    print(f"  {len(present):,}/{len(lemmas):,} DEX lemmas present in merged "
-          f"({coverage:.1%})  {'ok' if ok else f'FAIL — below {DEX_COVERAGE_MIN:.0%}'}")
-    if not ok:
-        missing_sample = [w for w in lemmas if w not in present][:20]
-        print(f"  a large gap means the vocabulary filter crept back in (spec §3.1) — "
-              f"sample missing: {', '.join(missing_sample)}")
-    return ok
-
-
-# ---------------------------------------------------------------------------
-# Check 5 — spread report (not pass/fail)
-# ---------------------------------------------------------------------------
-
-def print_spread_report(conn: sqlite3.Connection) -> None:
-    """Check 5: not pass/fail — a printed top-100 by spread, for a human to read.
-
-    Restricted to n_reliable=5 (every eligible source agrees the word clears
-    its floor) to filter out single-source noise, matching how this table's
-    top-by-spread was actually read during M4 (2026-09-08) — with n_reliable
-    unrestricted, the list is dominated by words only one small source (`eu`)
-    ever saw, which is a corroboration-count artifact, not a register signal.
-    """
-    print("[5] per-source disagreement report — top 100 by spread (not pass/fail)")
-    rows = conn.execute(
-        "SELECT word, zipf, spread, zipf_min, zipf_max FROM merged "
-        "WHERE n_reliable = 5 ORDER BY spread DESC LIMIT 100"
-    ).fetchall()
-    for word, zipf, spread, zmin, zmax in rows:
-        print(f"  {word:20s} zipf={zipf:.2f}  spread={spread:.2f}  "
-              f"[{zmin:.2f}, {zmax:.2f}]")
-    print("  read this by eye: register/topic-bound words are expected "
-          "(dumneavoastră-shaped); tokenizer artifacts are not.")
-
-
-# ---------------------------------------------------------------------------
-# Check 6 — idempotence across stages 2-4
-# ---------------------------------------------------------------------------
-
-def _source_zipf_hash(conn: sqlite3.Connection) -> str:
-    rows = conn.execute(
-        "SELECT word, source_id, zipf, reliable FROM source_zipf ORDER BY source_id, word"
-    ).fetchall()
-    return hashlib.sha256(repr(rows).encode()).hexdigest()
-
-
-def _merged_hash(conn: sqlite3.Connection) -> str:
-    rows = conn.execute("SELECT * FROM merged ORDER BY word").fetchall()
-    return hashlib.sha256(repr(rows).encode()).hexdigest()
-
-
-def _lemma_zipf_hash(conn: sqlite3.Connection) -> str:
-    rows = conn.execute("SELECT * FROM lemma_zipf ORDER BY lemma").fetchall()
-    return hashlib.sha256(repr(rows).encode()).hexdigest()
-
-
-def _package_hash(surface_payload: dict, by_source_payload: dict) -> str:
-    return hashlib.sha256(repr((surface_payload, by_source_payload)).encode()).hexdigest()
-
-
-def check_idempotence(conn: sqlite3.Connection, dex_db_path: Path) -> bool:
-    """Check 6: re-running stages 2-4 on unchanged source_counts must be
-    byte-identical at every stage. Also leaves merged/lemma_zipf freshly
-    rebuilt from the current source_counts, not stale from an earlier run."""
-    print("[6] idempotence (stages 2-4 re-run)")
-    ok = True
-
-    compute_all(conn)
-    h_a = _source_zipf_hash(conn)
-    compute_all(conn)
-    h_b = _source_zipf_hash(conn)
-    stage_ok = h_a == h_b
-    ok = stage_ok and ok
-    print(f"  compute_zipf: {'ok' if stage_ok else 'FAIL — source_zipf changed on re-run'} "
-          f"({h_a[:12]}... vs {h_b[:12]}...)")
-
-    sources = eligible_sources(conn)
-    dex_forms = load_dex_forms(dex_db_path)
-    run_merge(conn, sources, dex_forms)
-    h_a = _merged_hash(conn)
-    run_merge(conn, sources, dex_forms)
-    h_b = _merged_hash(conn)
-    stage_ok = h_a == h_b
-    ok = stage_ok and ok
-    print(f"  merge: {'ok' if stage_ok else 'FAIL — merged changed on re-run'} "
-          f"({h_a[:12]}... vs {h_b[:12]}...)")
-
-    if dex_db_path.exists():
-        form_lemma = load_form_lemma(dex_db_path)
-        run_lemma_layer(conn, sources, form_lemma)
-        h_a = _lemma_zipf_hash(conn)
-        run_lemma_layer(conn, sources, form_lemma)
-        h_b = _lemma_zipf_hash(conn)
-        stage_ok = h_a == h_b
-        ok = stage_ok and ok
-        print(f"  build_lemma_layer: {'ok' if stage_ok else 'FAIL — lemma_zipf changed on re-run'} "
-              f"({h_a[:12]}... vs {h_b[:12]}...)")
+    c.detail = {"lemmas": len(lemmas), "excluded_unreachable": len(all_lemmas) - len(lemmas),
+                "present": len(present), "coverage": coverage}
+    if coverage < DEX_COVERAGE_MIN:
+        c.fail(f"{len(present):,}/{len(lemmas):,} = {coverage:.1%}, below {DEX_COVERAGE_MIN:.0%} "
+               f"— the vocabulary filter crept back in? missing e.g. "
+               f"{[w for w in lemmas if w not in present][:10]}")
     else:
-        print(f"  build_lemma_layer: SKIPPED — DEX db not found at {dex_db_path}")
+        c.info(f"{len(present):,}/{len(lemmas):,} DEX lemmas present ({coverage:.1%}) ok")
 
-    surface_a, by_source_a = build_payloads(conn)
-    h_a = _package_hash(surface_a, by_source_a)
-    surface_b, by_source_b = build_payloads(conn)
-    h_b = _package_hash(surface_b, by_source_b)
-    stage_ok = h_a == h_b
-    ok = stage_ok and ok
-    print(f"  build_package: {'ok' if stage_ok else 'FAIL — package payload changed on re-run'} "
-          f"({h_a[:12]}... vs {h_b[:12]}...)")
 
-    return ok
+def spread_report(conn, n_panel: int, limit: int = 100) -> list:
+    """Not gated: top words by spread among those every eligible source rates."""
+    rows = conn.execute(
+        "SELECT word, zipf, spread, zipf_min, zipf_max FROM merged WHERE n_reliable = ? "
+        "ORDER BY spread DESC, word LIMIT ?", (n_panel, limit)).fetchall()
+    print(f"[spread] top {len(rows)} by spread among words reliable in all {n_panel} sources "
+          f"(read by eye; not gated)")
+    for word, zipf, spread, zmin, zmax in rows[:20]:
+        print(f"  {word:20s} zipf={zipf:.2f}  spread={spread:.2f}  [{zmin:.2f}, {zmax:.2f}]")
+    return [list(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Structural checks
+# ---------------------------------------------------------------------------
+
+def check_integrity(conn, c: Check) -> dict:
+    report = integrity.check_database(conn, progress=True)
+    c.detail = report.to_json()
+    for issue in report.issues.values():
+        where = f" [{issue['source']}]" if issue["source"] else ""
+        c.fail(f"{issue['code']}{where}: {issue['count']:,}, e.g. "
+               f"{json.dumps(issue['examples'][:2], ensure_ascii=False)}")
+    if report.ok:
+        c.info(f"{report.stats['words']:,} words, every invariant holds "
+               f"({report.stats['elapsed_s']}s)")
+    return report.stats
+
+
+def check_provenance(conn, c: Check, manifest: dict | None, stats: dict) -> None:
+    if manifest is None:
+        c.skip("no generation given — cannot bind the database to a build")
+        return
+    try:
+        check_db_matches(conn, manifest)
+    except PackageRefused as exc:
+        c.fail(str(exc))
+    hashes = stats.get("count_hashes", {})
+    for src in manifest["sources"]:
+        sid = src["source_id"]
+        if hashes.get(sid) != src["counts"]:
+            c.fail(f"{sid}: raw counts differ from the manifest's logical hash")
+    c.detail = {"build_id": manifest["build_id"], "panel": manifest["panel"],
+                "limits": manifest.get("provenance_limits", [])}
+    if c.status == "pass":
+        c.info(f"database matches build {manifest['build_id']} "
+               f"({len(manifest['panel'])} sources, counts hashes verified)")
+
+
+def check_lemma(conn, c: Check, manifest: dict | None, dex_db_path: Path,
+                stats: dict) -> None:
+    n = conn.execute("SELECT COUNT(*) FROM lemma_zipf").fetchone()[0]
+    below = stats.get("lemma_ratio_below_one", 0)
+    c.detail = {"lemmas": n, "ratio_below_one": below}
+    if below:
+        c.fail(f"{below:,} lemma(s) with family_ratio < 1")
+    if manifest is None:
+        c.skip("no manifest — cannot check that the layer belongs to the build")
+        return
+    if manifest["lemma"] != (n > 0):
+        c.fail(f"manifest says lemma={manifest['lemma']}, the database has {n:,} lemma rows")
+    if manifest["lemma"]:
+        if not dex_db_path.exists():
+            c.skip(f"DEX map not found at {dex_db_path} — cannot verify its identity")
+        else:
+            spec = importlib.util.spec_from_file_location(
+                "_bll", Path(__file__).resolve().parent / "build_lemma_layer.py")
+            bll = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(bll)
+            ident = bll.form_lemma_identity(bll.load_form_lemma(dex_db_path))
+            c.detail["dex_map"] = ident
+            if ident != manifest["dex_map"]:
+                c.fail("the DEX map differs from the one the build was made from")
+    if c.status == "pass":
+        c.info(f"{n:,} lemmas, none below ratio 1, layer agrees with the manifest")
+
+
+def _decode(path: Path) -> dict:
+    with lzma.open(path, "rb") as fh:
+        return msgpack.unpackb(fh.read(), raw=False)
+
+
+def _q(z: float) -> int:
+    return round(z * ZIPF_SCALE)
+
+
+def check_artifacts(conn, c: Check, gen_dir: Path | None) -> dict | None:
+    """Stream the shipped files against the database, one payload in memory at a time."""
+    if gen_dir is None:
+        c.skip("no generation given — artifacts not checked")
+        return None
+    try:
+        result = verify_generation(gen_dir)
+    except (PackageRefused, ValueError, FileNotFoundError) as exc:
+        c.fail(str(exc))
+        return None
+    manifest = load_manifest(gen_dir / INPUTS_FILENAME)
+    c.detail = {"build_id": result["build_id"], "files": result["files"]}
+    panel = manifest["panel"]
+
+    def header_ok(p: dict, name: str) -> None:
+        for key, want in (("format_version", result["data_format_version"]),
+                          ("build_id", manifest["build_id"]), ("sources", panel),
+                          ("zipf_scale", ZIPF_SCALE)):
+            if p.get(key) != want:
+                c.fail(f"{name}: header {key}={p.get(key)!r}, expected {want!r}")
+
+    # --- surface: compared row by row with the filtered, word-ordered `merged`
+    surface = _decode(gen_dir / SURFACE_FILENAME)
+    header_ok(surface, SURFACE_FILENAME)
+    words = surface["words"]
+    n = surface["word_count"]
+    for key in ("words", "zipf", "n_reliable", "n_attesting", "spread"):
+        if len(surface[key]) != n:
+            c.fail(f"{SURFACE_FILENAME}: {key} has {len(surface[key]):,} entries, not {n:,}")
+    if words_sha256(words) != surface["words_sha256"] or n != result["word_count"]:
+        c.fail(f"{SURFACE_FILENAME}: word list identity does not match")
+    for key, want in (("built", manifest["build_date"]), ("lemma", manifest["lemma"]),
+                      ("package_version", manifest["package_version"]),
+                      ("source_tokens", [s["total_tokens"] for s in manifest["sources"]]),
+                      ("n_sources", len(panel))):
+        if surface.get(key) != want:
+            c.fail(f"{SURFACE_FILENAME}: {key}={surface.get(key)!r}, expected {want!r}")
+    mismatches = 0
+    i = -1
+    for i, (w, z, nr, na, sp) in enumerate(conn.execute(
+            "SELECT word, zipf, n_reliable, n_attesting, spread FROM merged "
+            "WHERE length(word) - length(replace(word, '-', '')) <= ? ORDER BY word",
+            (MAX_HYPHENS,))):
+        if i >= n or (words[i], surface["zipf"][i], surface["n_reliable"][i],
+                      surface["n_attesting"][i], surface["spread"][i]) != (
+                          w, _q(z), nr, na, _q(sp)):
+            mismatches += 1
+            if mismatches <= 3:
+                c.fail(f"{SURFACE_FILENAME}: row {i} differs from merged ({w})")
+    if i + 1 != n:
+        c.fail(f"{SURFACE_FILENAME}: {n:,} rows, merged has {i + 1:,} shippable rows")
+    c.detail["surface_mismatches"] = mismatches
+    del surface
+
+    # --- by-source: compared with the reliable stage-2 values of the panel
+    by_source = _decode(gen_dir / BY_SOURCE_FILENAME)
+    header_ok(by_source, BY_SOURCE_FILENAME)
+    if by_source.get("words_sha256") != words_sha256(words) or len(by_source["by_source"]) != n:
+        c.fail(f"{BY_SOURCE_FILENAME}: not aligned with the surface word list")
+    else:
+        index = {s: k for k, s in enumerate(panel)}
+        cur = conn.execute(
+            f"SELECT word, source_id, zipf FROM source_zipf WHERE reliable = 1 AND source_id "
+            f"IN ({','.join('?' * len(panel))}) ORDER BY word, source_id", panel)
+        pending = next(cur, None)
+        bad = 0
+        for k, w in enumerate(words):
+            row = [None] * len(panel)
+            while pending is not None and pending[0] < w:
+                pending = next(cur, None)
+            while pending is not None and pending[0] == w:
+                row[index[pending[1]]] = _q(pending[2])
+                pending = next(cur, None)
+            if by_source["by_source"][k] != row:
+                bad += 1
+                if bad <= 3:
+                    c.fail(f"{BY_SOURCE_FILENAME}: row for {w!r} differs from source_zipf")
+        c.detail["by_source_mismatches"] = bad
+    del by_source, words
+
+    # --- TSV: same rows, same rounding, most frequent first
+    from export_tsv import HEADER, _centi
+    expected = conn.execute(
+        "SELECT word, zipf, n_reliable, n_attesting, spread FROM merged "
+        "WHERE length(word) - length(replace(word, '-', '')) <= ? ORDER BY zipf DESC, word",
+        (MAX_HYPHENS,))
+    bad = rows = 0
+    with gzip.open(gen_dir / TSV_FILENAME, "rt", encoding="utf-8", newline="\n") as fh:
+        if fh.readline() != HEADER:
+            c.fail(f"{TSV_FILENAME}: wrong header")
+        for line, (w, z, nr, na, sp) in zip(fh, expected):
+            rows += 1
+            if line != f"{w}\t{_centi(z)}\t{nr}\t{na}\t{_centi(sp)}\n":
+                bad += 1
+                if bad <= 3:
+                    c.fail(f"{TSV_FILENAME}: line {rows} differs ({w})")
+        extra_file = fh.readline()
+    if extra_file or expected.fetchone() is not None or rows != n:
+        c.fail(f"{TSV_FILENAME}: row count differs from the package ({rows:,} vs {n:,})")
+    c.detail["tsv_rows"] = rows
+
+    # --- lemma: present iff the manifest includes it; values equal lemma_zipf
+    has_file = LEMMA_FILENAME in result["files"]
+    if has_file != bool(manifest["lemma"]):
+        c.fail(f"lemma file {'present' if has_file else 'absent'} but manifest lemma="
+               f"{manifest['lemma']}")
+    elif has_file:
+        lemma = _decode(gen_dir / LEMMA_FILENAME)
+        header_ok(lemma, LEMMA_FILENAME)
+        db_rows = conn.execute("SELECT lemma, zipf, n_forms, zipf_headword, family_ratio "
+                               "FROM lemma_zipf ORDER BY lemma").fetchall()
+        want = ([r[0] for r in db_rows], [_q(r[1]) for r in db_rows], [r[2] for r in db_rows],
+                [-1 if r[3] is None else _q(r[3]) for r in db_rows],
+                [-1 if r[4] is None else _q(r[4]) for r in db_rows])
+        got = (lemma["lemmas"], lemma["zipf"], lemma["n_forms"], lemma["zipf_headword"],
+               lemma["family_ratio"])
+        if got != want or lemma["lemma_count"] != len(db_rows):
+            c.fail(f"{LEMMA_FILENAME}: values differ from lemma_zipf")
+        if any(0 <= r < ZIPF_SCALE for r in lemma["family_ratio"]):
+            c.fail(f"{LEMMA_FILENAME}: a shipped family_ratio is below 1")
+        c.detail["lemmas"] = len(db_rows)
+    if c.status == "pass":
+        c.info(f"{len(result['files'])} files match result.json; {n:,} words, by-source and "
+               f"TSV equal the database{'; lemma layer equal' if has_file else ''}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def _hash_tree(gen_dir: Path | None) -> dict:
+    if gen_dir is None:
+        return {}
+    return {p.name: sha256_file(p) for p in sorted(Path(gen_dir).iterdir()) if p.is_file()}
+
+
+def run_validation(db: Path, gen_dir: Path | None, *, strict: bool, dex_db: Path,
+                   wordfreq_python: Path, skip: list[str] = (), hash_inputs: bool | None = None
+                   ) -> dict:
+    """Validate; returns the report dict. Never writes to `db` or `gen_dir`."""
+    started = time.time()
+    hash_inputs = strict if hash_inputs is None else hash_inputs
+    before = {"db": sha256_file(db) if hash_inputs else None, "generation": _hash_tree(gen_dir)}
+    conn = connect_readonly(db)
+    manifest = load_manifest(gen_dir / INPUTS_FILENAME) if gen_dir else None
+    checks = {name: Check(name) for name in CHECKS}
+    stats: dict = {}
+    references: dict = {}
+    try:
+        for name in CHECKS:
+            c = checks[name]
+            print(f"[{name}]", flush=True)
+            if name in skip:
+                c.status = "skipped_by_developer"
+                c.messages.append("skipped with --skip")
+                print("  skipped with --skip")
+                continue
+            if name == "integrity":
+                stats = check_integrity(conn, c)
+            elif name == "provenance":
+                check_provenance(conn, c, manifest, stats)
+            elif name == "function_words":
+                check_function_words(conn, c)
+            elif name == "wordfreq":
+                references["wordfreq"] = check_wordfreq(conn, c, wordfreq_python)
+            elif name == "monotone_pairs":
+                check_monotone_pairs(conn, c, strict)
+            elif name == "dex_coverage":
+                check_dex_coverage(conn, c, dex_db)
+            elif name == "lemma":
+                check_lemma(conn, c, manifest, dex_db, stats)
+            elif name == "artifacts":
+                check_artifacts(conn, c, gen_dir)
+        n_panel = len(manifest["panel"]) if manifest else len(stats.get("eligible", []))
+        spread = spread_report(conn, n_panel)
+    finally:
+        conn.close()
+    after = {"db": sha256_file(db) if hash_inputs else None, "generation": _hash_tree(gen_dir)}
+    unchanged = before == after
+    if strict:
+        for c in checks.values():
+            if c.status == "skip":
+                c.status = "fail"
+                c.messages.append("strict: a skipped check fails")
+    if not unchanged:
+        checks["integrity"].fail("the inspected database or generation changed during validation")
+    result = None
+    if gen_dir is not None and (gen_dir / RESULT_FILENAME).exists():
+        result = json.loads((gen_dir / RESULT_FILENAME).read_text())
+    statuses = {n: c.status for n, c in checks.items()}
+    synthetic = bool(manifest and manifest.get("synthetic"))
+    eligible = (strict and all(s == "pass" for s in statuses.values()) and not synthetic
+                and manifest is not None)
+    return {
+        "kind": "wrodfreq-validation-report",
+        "report_version": 1,
+        "strict": strict,
+        "release_eligible": eligible,
+        "synthetic": synthetic,
+        "build_id": manifest and manifest["build_id"],
+        "package_version": manifest and manifest["package_version"],
+        "code": manifest and manifest["code"],
+        "inputs_sha256": result and result["inputs_sha256"],
+        "artifacts": result and result["files"],
+        "statuses": statuses,
+        "checks": {n: c.to_json() for n, c in checks.items()},
+        "references": references,
+        "provenance_limits": (manifest or {}).get("provenance_limits", []),
+        "inputs_unchanged": unchanged,
+        "inspected": {"db_sha256_before": before["db"], "db_sha256_after": after["db"],
+                      "generation_files": after["generation"]},
+        "spread_top100": spread,
+        "informational": {"validated_at": datetime.now(timezone.utc).isoformat(),
+                          "elapsed_s": round(time.time() - started, 1)},
+    }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    parser = argparse.ArgumentParser(description="Read-only validation of a wROdfreq build")
+    parser.add_argument("--db", type=Path, required=True)
+    parser.add_argument("--generation", type=Path,
+                        help="Completed generation directory (holds result.json)")
+    parser.add_argument("--manifest", type=Path,
+                        help="Alternatively, the generation's result.json")
+    parser.add_argument("--strict", action="store_true",
+                        help="Skips fail; hash inputs before/after; required for a release")
+    parser.add_argument("--report", type=Path, help="Write the JSON report here")
     parser.add_argument("--dex-db", type=Path, default=DEFAULT_DEX_DB)
     parser.add_argument("--wordfreq-python", type=Path, default=WORDFREQ_PYTHON)
+    parser.add_argument("--skip", action="append", default=[], choices=CHECKS,
+                        help="Developer use: skip a check (the report is never eligible)")
     args = parser.parse_args()
 
-    conn = connect(args.db)
-
-    results: dict[str, bool] = {
-        "function_words": check_function_words(conn),
-    }
-    wf_agreement = check_wordfreq_agreement(conn, args.wordfreq_python)
-    if wf_agreement is not None:
-        results["wordfreq_agreement"] = wf_agreement
-    results["monotone_pairs"] = check_monotone_pairs(conn)
-    dex_coverage = check_dex_coverage(conn, args.dex_db)
-    if dex_coverage is not None:
-        results["dex_coverage"] = dex_coverage
-    print_spread_report(conn)
-    results["idempotence"] = check_idempotence(conn, args.dex_db)
-
-    conn.close()
-
-    passed = sum(results.values())
-    print(f"\n{passed}/{len(results)} checks passed")
-    return 0 if all(results.values()) else 1
+    gen_dir = args.generation or (args.manifest.parent if args.manifest else None)
+    if not args.db.is_file():
+        print(f"database not found: {args.db} (nothing created)", file=sys.stderr)
+        return 2
+    if args.report is not None:
+        rep = args.report.resolve()
+        if rep == args.db.resolve() or (gen_dir and rep.is_relative_to(gen_dir.resolve())):
+            print("refused: the report must not be written over or into the inspected input",
+                  file=sys.stderr)
+            return 2
+    report = run_validation(args.db, gen_dir, strict=args.strict, dex_db=args.dex_db,
+                            wordfreq_python=args.wordfreq_python, skip=args.skip)
+    if args.report:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        tmp = args.report.with_suffix(".tmp")
+        tmp.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n")
+        tmp.replace(args.report)
+    passed = sum(s == "pass" for s in report["statuses"].values())
+    print(f"\n{passed}/{len(CHECKS)} checks passed: "
+          + ", ".join(f"{n}={s}" for n, s in report["statuses"].items()))
+    print(f"release_eligible: {report['release_eligible']}"
+          + (" (synthetic build)" if report["synthetic"] else ""))
+    if args.strict:
+        return 0 if all(s == "pass" for s in report["statuses"].values()) else 1
+    return 1 if any(s == "fail" for s in report["statuses"].values()) else 0
 
 
 if __name__ == "__main__":

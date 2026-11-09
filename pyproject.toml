@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wrodfreq"
-version = "0.2.0"
+version = "0.2.1"
 description = "Romanian word-frequency table on the Zipf scale — drop-in compatible with wordfreq"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,6 +31,8 @@ build = [
 ]
 dev = [
     "pytest>=8",
+    # build/make_distribution.py: sdist, then the wheel built from that sdist.
+    "build>=1.2",
 ]
 
 [tool.hatch.build]
@@ -42,7 +44,7 @@ dev = [
 # files either, there's nothing for the wheel step to include regardless of
 # its own artifacts setting — confirmed by inspecting both archives after a
 # real build, not assumed from the docs.
-artifacts = ["wrodfreq/data/*.msgpack.xz"]
+artifacts = ["wrodfreq/data/*.msgpack.xz", "wrodfreq/data/build.json"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["wrodfreq"]

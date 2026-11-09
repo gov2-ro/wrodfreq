@@ -11,10 +11,12 @@ leave a stale row behind. Also makes idempotence (spec §11.6) trivial — a
 full rebuild from the same inputs is byte-identical by construction, no
 incremental-drift risk to reason about.
 
-Rebuild is atomic: results land in a scratch `merged_new` table, and only the
-final `DROP TABLE merged; ALTER TABLE merged_new RENAME TO merged;` swap is
-allowed to touch the real `merged` name — a crash or Ctrl+C mid-run leaves the
-previous `merged` (or none, on a first run) untouched rather than half-built.
+Rebuild is atomic: results land in a scratch `merged_new` table, and the
+`DROP TABLE merged; ALTER TABLE merged_new RENAME TO merged;` swap commits in the
+same transaction as the stage record (`stage_state.merge`, ADR-006) — a crash or
+Ctrl+C mid-run leaves the previous `merged` (or none, on a first run) untouched
+rather than half-built. The merge refuses to run on a stage 2 output that does not
+describe the current counts.
 
 **Contemporary sources only, by default** (spec §6.2's "a frequency table that
 quietly averages 1890 and 2023 is lying about the present" — CLAUDE.md
@@ -61,9 +63,39 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ingest_state import sha256_text
+from provenance import read_stages, write_stage, zipf_inputs
 from wrodfreq.db import DEFAULT_DB_PATH, connect, eligible_sources
 from wrodfreq.zipf import merge_zipf
+
+
+class StageRefused(RuntimeError):
+    """Stage 2 output is missing or stale for a source in the panel."""
+
+
+def dex_forms_identity(dex_forms: set[str]) -> dict | None:
+    if not dex_forms:
+        return None
+    return {"forms": len(dex_forms), "sha256": sha256_text("\n".join(sorted(dex_forms)))}
+
+
+def current_zipf_runs(conn: sqlite3.Connection, sources: list[str]) -> dict[str, str]:
+    """{source: stage-2 run id}; raises if any is missing or stale."""
+    stages = read_stages(conn)
+    runs, bad = {}, []
+    for sid in sources:
+        rec = stages.get(f"zipf:{sid}")
+        if rec is None:
+            bad.append(f"{sid}: stage 2 has not run on the current counts")
+        elif rec["inputs"] != zipf_inputs(conn, sid):
+            bad.append(f"{sid}: stage 2 output is stale")
+        else:
+            runs[sid] = rec["run_id"]
+    if bad:
+        raise StageRefused("run build/compute_zipf.py first:\n  " + "\n  ".join(bad))
+    return runs
 
 DEFAULT_DEX_DB = Path.home() / "devbox/otios/data/processed/inflected_forms.db"
 BATCH_SIZE = 200_000
@@ -98,10 +130,24 @@ MERGED_DDL = """
 
 
 def run_merge(conn: sqlite3.Connection, sources: list[str], dex_forms: set[str]) -> tuple[int, int]:
+    """Rebuild `merged` and its stage record in one transaction (see _run_merge)."""
+    try:
+        return _run_merge(conn, sources, dex_forms)
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def _run_merge(conn: sqlite3.Connection, sources: list[str], dex_forms: set[str]) -> tuple[int, int]:
     """Rebuild `merged` from `source_zipf`. Returns (words_written, words_below_floor)."""
     n_sources = len(sources)
     placeholders = ",".join("?" for _ in sources)
+    zipf_runs = current_zipf_runs(conn, sources)
 
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
     conn.execute("DROP TABLE IF EXISTS merged_new")
     conn.execute(f"CREATE TABLE merged_new ({MERGED_DDL}) WITHOUT ROWID")
 
@@ -160,6 +206,9 @@ def run_merge(conn: sqlite3.Connection, sources: list[str], dex_forms: set[str])
 
     conn.execute("DROP TABLE IF EXISTS merged")
     conn.execute("ALTER TABLE merged_new RENAME TO merged")
+    conn.execute("DELETE FROM stage_state WHERE stage = 'lemma'")
+    write_stage(conn, "merge", {"sources": list(sources), "zipf_runs": zipf_runs,
+                                "dex": dex_forms_identity(dex_forms)})
     conn.commit()
 
     return words_written, words_below_floor
@@ -174,6 +223,9 @@ def main() -> int:
                          help="Skip the DEX lookup — is_dex = 0 for every word")
     args = parser.parse_args()
 
+    if not args.db.is_file():
+        print(f"database not found: {args.db}", file=sys.stderr)
+        return 2
     conn = connect(args.db)
 
     sources = eligible_sources(conn)
@@ -185,7 +237,11 @@ def main() -> int:
     dex_forms = load_dex_forms(None if args.no_dex else args.dex_db)
 
     start = time.time()
-    words_written, words_below_floor = run_merge(conn, sources, dex_forms)
+    try:
+        words_written, words_below_floor = run_merge(conn, sources, dex_forms)
+    except StageRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     elapsed = time.time() - start
 
     print(f"\nDone: {words_written:,} words written to `merged`, "

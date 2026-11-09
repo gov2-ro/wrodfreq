@@ -65,6 +65,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from wrodfreq.db import DEFAULT_DB_PATH, connect
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ingest_state import record_count_change
 from wrodfreq.tokenizer import tokenize
 
 SNAPSHOT_PATH = Path("data/checkpoints/pre_apostrophe_migration.db")
@@ -196,6 +199,7 @@ def main() -> int:
             # compute_zipf.py never deletes the row of a word that vanished; wipe
             # the slice so its next run starts clean (same trap as migrate_dashes).
             conn.execute("DELETE FROM source_zipf WHERE source_id=?", (s,))
+            record_count_change(conn, s, "migrate_apostrophes")
 
         after = totals(conn)
         for s, (occ_b, _) in before.items():

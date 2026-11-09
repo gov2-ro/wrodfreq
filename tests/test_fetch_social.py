@@ -56,9 +56,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(fs, "get_page", no_network)
 
     def no_compress(*a, **k):
-        raise AssertionError("compress() must not run in these tests")
+        raise AssertionError("compress_verified() must not run in these tests")
 
-    monkeypatch.setattr(fs, "compress", no_compress)
+    monkeypatch.setattr(fs, "compress_verified", no_compress)
     return raw
 
 
@@ -169,12 +169,14 @@ def test_present_bytes_equal_to_size_leaves_file_alone(env):
 
 # --- fetch(): done ----------------------------------------------------------
 
-def test_done_is_skipped_untouched(env):
+def test_done_without_an_archive_is_finalized_not_skipped(env, monkeypatch):
+    """B7: a done crawl whose archive is missing must be finalized, never skipped forever."""
+    calls = []
+    monkeypatch.setattr(fs, "compress_verified", lambda nd, zst: calls.append(nd) or {
+        "records": 5, "content_sha256": "x", "sha256": "y", "size": 1})
     recs = _records(5)
     p = _write(env, recs)
-    before_state = {"before": 42, "count": 5, "done": True}   # no bytes, file present
-    cp = {KEY: dict(before_state)}
+    cp = {KEY: {"before": 42, "count": 5, "done": True, "bytes": p.stat().st_size}}
     assert _resume(cp) == 0
-    assert _lines(p) == recs                 # not truncated
-    assert cp[KEY] == before_state           # not recovered / rewritten
-    assert not fs.CHECKPOINT.exists()        # nothing saved
+    assert calls == [p]
+    assert cp[KEY]["finalized"]["records"] == 5

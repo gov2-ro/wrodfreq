@@ -43,10 +43,20 @@ surface form; the cross-source merge algorithm doesn't need to know the
 difference.
 
 `family_ratio` (undivided family total / disambiguated total, spec §9) is
-computed the same way, in the same log-to-linear conversion: as
-`10 ** (undivided_merged_zipf - disambiguated_merged_zipf)`. A `merged`-scale
-raw-count ratio was deliberately not used, for the same CulturaX-dominance
-reason as above.
+computed the same way, in the same log-to-linear conversion — **over the same
+source panel** (ADR-005, brief B7 finding A06). For lemma L, R is the set of
+eligible sources whose *disambiguated* count for L clears the reliability floor;
+both merges run over exactly R:
+
+    z_disambig = merge_zipf([zipf(disambig[L, s], tokens[s]) for s in R])
+    z_loose    = merge_zipf([zipf(loose[L, s],    tokens[s]) for s in R])
+    family_ratio = 10 ** (z_loose - z_disambig)
+
+Loose >= disambiguated in every source of R, and the merge is monotone, so the
+ratio is >= 1 by construction. Before ADR-005 the loose merge ran over its own
+reliable panel, which could hold extra (often large, low-Zipf) sources, and 2,382
+lemmas got a ratio below 1 (`detoxica` 0.03). A raw-count ratio summed across
+corpora was deliberately not used, for the same CulturaX-dominance reason as above.
 
 Only words present in the DEX paradigm map (`form_lemma`) get a lemma_zipf
 row *at all* — a surface form absent from the map is simply not part of any
@@ -73,12 +83,45 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from ingest_state import sha256_text
+from provenance import read_stages, write_stage
 from wrodfreq.db import DEFAULT_DB_PATH, connect, eligible_sources
 from wrodfreq.lemma import aggregate_by_family, aggregate_loose
 from wrodfreq.zipf import MIN_OCC_PER_SOURCE, is_reliable, merge_zipf, zipf_from_counts
 
 DEFAULT_DEX_DB = Path.home() / "devbox/otios/data/processed/inflected_forms.db"
+# Floating-point noise only: a ratio this close below 1 is normalized to 1.
+# Anything further below 1 is a defect and stops the stage (ADR-005).
+FAMILY_RATIO_TOLERANCE = 1e-9
+
+
+class StageRefused(RuntimeError):
+    """The merge this layer reads is missing, stale, or from another panel."""
+
+
+def form_lemma_identity(form_lemma: dict[str, list[str]]) -> dict:
+    """Content identity of the DEX paradigm map, independent of its file layout."""
+    body = "\n".join(f"{f}\t{','.join(sorted(ls))}" for f, ls in sorted(form_lemma.items()))
+    return {"forms": len(form_lemma), "sha256": sha256_text(body)}
+
+
+def matched_panel(disambig: dict[str, float], loose: dict[str, float],
+                  tokens: dict[str, int]) -> tuple[float, float] | None:
+    """(lemma zipf, family_ratio) over the sources whose disambiguated count is
+    reliable, or None if there is none. `disambig`/`loose` are keyed by source."""
+    panel = sorted(s for s, occ in disambig.items() if is_reliable(occ, MIN_OCC_PER_SOURCE))
+    if not panel:
+        return None
+    z_d = merge_zipf([zipf_from_counts(disambig[s], tokens[s]) for s in panel])
+    z_l = merge_zipf([zipf_from_counts(loose[s], tokens[s]) for s in panel])
+    ratio = 10 ** (z_l - z_d)
+    if ratio < 1:
+        if ratio < 1 - FAMILY_RATIO_TOLERANCE:
+            raise AssertionError(f"family_ratio {ratio!r} < 1 over a matched panel")
+        ratio = 1.0
+    return z_d, ratio
 
 
 def load_form_lemma(dex_db_path: Path) -> dict[str, list[str]]:
@@ -128,7 +171,23 @@ LEMMA_ZIPF_DDL = """
 """
 
 
-def run(conn: sqlite3.Connection, sources: list[str], form_lemma: dict[str, list[str]]) -> int:
+def run(conn: sqlite3.Connection, sources: list[str], form_lemma: dict[str, list[str]],
+        dex_identity: dict | None = None) -> int:
+    """Rebuild `lemma_zipf` and its stage record in one transaction."""
+    merge = read_stages(conn).get("merge")
+    if merge is None or merge["inputs"].get("sources") != list(sources):
+        raise StageRefused("run build/merge.py on the current panel first — the lemma layer "
+                           "reads `merged` for zipf_headword")
+    try:
+        return _run(conn, sources, form_lemma, merge["run_id"],
+                    dex_identity or form_lemma_identity(form_lemma))
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+
+
+def _run(conn, sources, form_lemma, merge_run, dex_identity) -> int:
     source_tokens = dict(
         conn.execute(
             "SELECT source_id, total_tokens FROM sources WHERE source_id IN "
@@ -141,14 +200,15 @@ def run(conn: sqlite3.Connection, sources: list[str], form_lemma: dict[str, list
     conn.executemany("INSERT INTO _dex_forms VALUES (?)", [(f,) for f in form_lemma])
     print(f"  {len(form_lemma):,} distinct DEX forms loaded", flush=True)
 
-    disambig_zipfs: dict[str, list[float]] = defaultdict(list)
-    loose_zipfs: dict[str, list[float]] = defaultdict(list)
+    # Per lemma, per source: occurrence totals (not Zipf yet) — the panel is
+    # chosen per lemma from the disambiguated counts, then applied to both.
+    disambig_occ: dict[str, dict[str, float]] = defaultdict(dict)
+    loose_occ: dict[str, dict[str, float]] = defaultdict(dict)
     contributing_forms: dict[str, set[str]] = defaultdict(set)
 
     for source_id in sources:
         start = time.time()
         freqs = fetch_dex_freqs(conn, source_id)
-        total_tokens = source_tokens[source_id]
 
         for form in freqs:
             for lemma in form_lemma[form]:
@@ -156,28 +216,20 @@ def run(conn: sqlite3.Connection, sources: list[str], form_lemma: dict[str, list
 
         disambig = aggregate_by_family(freqs, form_lemma)
         loose = aggregate_loose(freqs, form_lemma)
-
         for lemma, (occ, _doc) in disambig.items():
-            if is_reliable(occ, MIN_OCC_PER_SOURCE):
-                disambig_zipfs[lemma].append(zipf_from_counts(occ, total_tokens))
+            disambig_occ[lemma][source_id] = occ
         for lemma, occ in loose.items():
-            if is_reliable(occ, MIN_OCC_PER_SOURCE):
-                loose_zipfs[lemma].append(zipf_from_counts(occ, total_tokens))
+            loose_occ[lemma][source_id] = occ
 
         print(f"  [{source_id}] {len(freqs):,} DEX-paradigm words found, "
               f"{len(disambig):,} lemmas touched | {time.time() - start:.0f}s", flush=True)
-
-    conn.execute("DROP TABLE IF EXISTS lemma_zipf_new")
-    conn.execute(f"CREATE TABLE lemma_zipf_new ({LEMMA_ZIPF_DDL}) WITHOUT ROWID")
 
     # zipf_headword: the lemma's own citation form, looked up in the already-
     # computed surface-form table — a JOIN, not per-lemma queries.
     conn.execute("DROP TABLE IF EXISTS _lemma_names")
     conn.execute("CREATE TEMP TABLE _lemma_names (lemma TEXT PRIMARY KEY)")
-    conn.executemany(
-        "INSERT OR IGNORE INTO _lemma_names VALUES (?)",
-        [(lemma,) for lemma in disambig_zipfs],
-    )
+    conn.executemany("INSERT OR IGNORE INTO _lemma_names VALUES (?)",
+                     [(lemma,) for lemma in disambig_occ])
     # CROSS JOIN forces _lemma_names (small) as the driving table instead of
     # scanning all of `merged` — same reasoning as fetch_dex_freqs above.
     headwords = dict(
@@ -188,19 +240,28 @@ def run(conn: sqlite3.Connection, sources: list[str], form_lemma: dict[str, list
     )
 
     rows = []
-    for lemma, zipfs in disambig_zipfs.items():
-        zipf = merge_zipf(zipfs)
-        loose = loose_zipfs.get(lemma)
-        family_ratio = 10 ** (merge_zipf(loose) - zipf) if loose else None
+    for lemma in sorted(disambig_occ):
+        result = matched_panel(disambig_occ[lemma], loose_occ[lemma], source_tokens)
+        if result is None:
+            continue
+        zipf, family_ratio = result
         n_forms = len(contributing_forms.get(lemma, ()))
         rows.append((lemma, zipf, n_forms, headwords.get(lemma), family_ratio))
 
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("DROP TABLE IF EXISTS lemma_zipf_new")
+    conn.execute(f"CREATE TABLE lemma_zipf_new ({LEMMA_ZIPF_DDL}) WITHOUT ROWID")
     conn.executemany("INSERT INTO lemma_zipf_new VALUES (?,?,?,?,?)", rows)
     conn.execute("DROP TABLE IF EXISTS lemma_zipf")
     conn.execute("ALTER TABLE lemma_zipf_new RENAME TO lemma_zipf")
+    write_stage(conn, "lemma", {"merge_run": merge_run, "sources": list(sources),
+                                "dex_map": dex_identity,
+                                "family_ratio": "matched-panel (ADR-005)"})
+    conn.commit()
     conn.execute("DROP TABLE IF EXISTS _dex_forms")
     conn.execute("DROP TABLE IF EXISTS _lemma_names")
-    conn.commit()
     return len(rows)
 
 
@@ -217,6 +278,9 @@ def main() -> int:
               f"Pass --dex-db to point elsewhere.")
         return 0
 
+    if not args.db.is_file():
+        print(f"database not found: {args.db}", file=sys.stderr)
+        return 2
     conn = connect(args.db)
     sources = eligible_sources(conn)
     if not sources:
@@ -229,7 +293,11 @@ def main() -> int:
     form_lemma = load_form_lemma(args.dex_db)
 
     start = time.time()
-    n_lemmas = run(conn, sources, form_lemma)
+    try:
+        n_lemmas = run(conn, sources, form_lemma)
+    except StageRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     elapsed = time.time() - start
     print(f"\nDone: {n_lemmas:,} lemmas written to `lemma_zipf` in {elapsed:.0f}s",
           flush=True)

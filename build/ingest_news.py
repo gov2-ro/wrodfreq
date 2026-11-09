@@ -30,10 +30,10 @@ every other ingester, via wrodfreq.tokenizer directly (spec §3).
 
 Usage:
     python build/ingest_news.py              # full run (hours to a day+)
-    python build/ingest_news.py --test       # first 200k scanned rows of shard 0, no resume
-    python build/ingest_news.py --limit N    # stop after N scanned rows (not matched docs —
-                                              # match rate is unknown up front)
-    python build/ingest_news.py --resume     # pick up from checkpoint
+    python build/ingest_news.py --test       # first 200k scanned rows, into a new experiment db
+    python build/ingest_news.py --limit N    # stop at absolute scanned row N (not matched
+                                              # docs — match rate is unknown up front)
+    python build/ingest_news.py --resume     # continue the generation stored in the db
 
 Restart loop (stop automatically on success):
     while true; do
@@ -42,25 +42,25 @@ Restart loop (stop automatically on success):
         echo "[$(date)] restarting in 15s..." && sleep 15
     done
 
-Output: data/wrodfreq.db, source_id='news'. Checkpoint: data/checkpoints/news_checkpoint.json
+Output: data/wrodfreq.db, source_id='news'. Progress: `ingest_state` in the same db,
+committed with the counts (ADR-004).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
-import sqlite3
 import sys
 import time
-from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from ingest_state import Batch, IngestRefused, SourceSpec, begin, target_db
+from wrodfreq.db import connect
 from wrodfreq.tokenizer import tokenize
 
 SOURCE_ID     = "news"
@@ -76,8 +76,16 @@ TEXT_COLUMN    = "plain_text"
 LANG_COLUMN    = "language"
 TARGET_LANG    = "ro"
 
-CHECKPOINT    = Path("data/checkpoints/news_checkpoint.json")
-COMMIT_EVERY  = 50_000  # rows *scanned* between DB commits (match rate is low and uneven)
+COMMIT_EVERY  = 50_000  # rows *scanned* between commits (match rate is low and uneven)
+CURSOR_VERSION = 1
+
+SPEC = SourceSpec(
+    source_id=SOURCE_ID, display_name=DISPLAY_NAME, url=URL, licence=LICENCE,
+    register=REGISTER, period=PERIOD, period_note=PERIOD_NOTE,
+    cursor_version=CURSOR_VERSION,
+    policy={"policy_version": 1, "repo": HF_PARQUET_DIR, "text_column": TEXT_COLUMN,
+            "lang_column": LANG_COLUMN, "target_lang": TARGET_LANG, "unit": "row"},
+)
 
 _shutdown = False
 
@@ -108,55 +116,7 @@ signal.signal(signal.SIGHUP, _handle_signal)
 signal.signal(signal.SIGINT, _handle_signal)
 
 
-# ---------------------------------------------------------------------------
-# Database
-# ---------------------------------------------------------------------------
-
-def ensure_source_row(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        INSERT INTO sources (source_id, display_name, url, licence, register,
-                              period, period_note, total_tokens, total_docs, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'in_progress')
-        ON CONFLICT(source_id) DO NOTHING
-        """,
-        (SOURCE_ID, DISPLAY_NAME, URL, LICENCE, REGISTER, PERIOD, PERIOD_NOTE),
-    )
-    conn.commit()
-
-
-def flush(conn: sqlite3.Connection, word_counts: dict, doc_counts: dict,
-          total_tokens: int, total_docs: int, status: str) -> None:
-    if word_counts:
-        conn.executemany(
-            """
-            INSERT INTO source_counts (word, source_id, occurrences, documents)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(word, source_id) DO UPDATE SET
-                occurrences = occurrences + excluded.occurrences,
-                documents   = documents   + excluded.documents
-            """,
-            [(w, SOURCE_ID, c, doc_counts[w]) for w, c in word_counts.items()],
-        )
-        word_counts.clear()
-        doc_counts.clear()
-    conn.execute(
-        """
-        UPDATE sources SET total_tokens = ?, total_docs = ?, status = ?,
-                            ingested_at = ?
-        WHERE source_id = ?
-        """,
-        (total_tokens, total_docs, status,
-         datetime.now(timezone.utc).isoformat(), SOURCE_ID),
-    )
-    conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------------------------
-
-def _empty_checkpoint() -> dict:
+def empty_cursor() -> dict:
     return {
         "completed_files": [],
         "current_file": None,
@@ -169,26 +129,8 @@ def _empty_checkpoint() -> dict:
     }
 
 
-def load_checkpoint() -> dict:
-    if CHECKPOINT.exists():
-        try:
-            cp = _empty_checkpoint()
-            cp.update(json.loads(CHECKPOINT.read_text()))
-            return cp
-        except (json.JSONDecodeError, ValueError):
-            print("warning: corrupted checkpoint, starting fresh")
-    return _empty_checkpoint()
-
-
-def save_checkpoint(cp: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp, indent=2))
-    tmp.replace(CHECKPOINT)
-
-
 # ---------------------------------------------------------------------------
-# Parquet processing
+# Parquet reading — tests replace these two functions
 # ---------------------------------------------------------------------------
 
 def list_parquet_files() -> list[str]:
@@ -198,130 +140,37 @@ def list_parquet_files() -> list[str]:
     return sorted(p for p in paths if p.endswith(".parquet"))
 
 
-def process_file(
-    hf_path: str,
-    conn: sqlite3.Connection,
-    cp: dict,
-    start_row: int,
-    scan_limit: int | None,
-    global_start: float,
-) -> tuple[int, int, bool]:
-    """Process one remote parquet file starting at start_row (scan position).
+def iter_rows(hf_path: str, start_row: int):
+    """Yield (language, text) for each row of one remote parquet file from `start_row`.
 
-    `scan_limit` bounds total *rows scanned* across the whole run (not
-    matched Romanian docs — the match rate is unknown up front, so bounding
-    by matches could scan an entire multi-GB shard on a --test run and never
-    stop). Updates cp['current_file_rows_scanned'] / '..._docs_matched' /
-    '..._tokens_done' at each COMMIT_EVERY boundary and at function exit.
-    Returns (session_rows_scanned, session_docs_matched, shutdown_requested).
+    Only the two needed columns are fetched. A network error propagates.
     """
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
 
-    global _shutdown
     fname = hf_path.rsplit("/", 1)[-1]
-    fs = HfFileSystem()
-
-    word_counts: dict = defaultdict(int)
-    doc_counts: dict = defaultdict(int)
-    session_rows = 0
-    session_docs = 0
-    session_tokens = 0
-    tokens_base = cp["current_file_tokens_done"]
-    docs_base = cp["current_file_docs_matched"]
-
-    def checkpoint_progress(status: str) -> None:
-        cp["current_file_rows_scanned"] = start_row + session_rows
-        cp["current_file_docs_matched"] = docs_base + session_docs
-        cp["current_file_tokens_done"] = tokens_base + session_tokens
-        total_tokens = cp["tokens_in_completed_files"] + cp["current_file_tokens_done"]
-        total_docs = cp["docs_in_completed_files"] + cp["current_file_docs_matched"]
-        flush(conn, word_counts, doc_counts, total_tokens, total_docs, status)
-        save_checkpoint(cp)
-
-    with fs.open(hf_path, "rb") as fh:
+    with HfFileSystem().open(hf_path, "rb") as fh:
         pf = pq.ParquetFile(fh)
         num_groups = pf.metadata.num_row_groups
-        total_rows = pf.metadata.num_rows
-
-        start_group = num_groups
-        skip_in_group = 0
         rows_before = 0
+        print(f"  [{fname}] {pf.metadata.num_rows:,} rows, {num_groups} groups, "
+              f"starting at row {start_row:,}", flush=True)
         for g in range(num_groups):
             rg_rows = pf.metadata.row_group(g).num_rows
             if rows_before + rg_rows <= start_row:
                 rows_before += rg_rows
-            else:
-                start_group = g
-                skip_in_group = start_row - rows_before
-                break
+                continue
+            cols = pf.read_row_group(g, columns=[LANG_COLUMN, TEXT_COLUMN])
+            langs = cols.column(LANG_COLUMN).to_pylist()
+            texts = cols.column(TEXT_COLUMN).to_pylist()
+            skip = max(0, start_row - rows_before)
+            rows_before += rg_rows
+            yield from zip(langs[skip:], texts[skip:])
 
-        if start_row == 0:
-            print(f"  [{fname}] {total_rows:,} rows, {num_groups} groups", flush=True)
-        elif start_group < num_groups:
-            print(f"  [{fname}] resuming row {start_row:,}/{total_rows:,} "
-                  f"(group {start_group}/{num_groups})", flush=True)
 
-        for g in range(start_group, num_groups):
-            if _shutdown:
-                checkpoint_progress("in_progress")
-                return session_rows, session_docs, True
-
-            try:
-                cols = pf.read_row_group(g, columns=[LANG_COLUMN, TEXT_COLUMN])
-                langs = cols.column(LANG_COLUMN).to_pylist()
-                texts = cols.column(TEXT_COLUMN).to_pylist()
-            except Exception as exc:
-                checkpoint_progress("in_progress")
-                print(f"  [{fname}] network error at group {g}: {exc}", flush=True)
-                print(f"  checkpoint saved at {start_row + session_rows:,} rows scanned "
-                      f"— restart with --resume", flush=True)
-                return session_rows, session_docs, True
-            if g == start_group and skip_in_group:
-                langs = langs[skip_in_group:]
-                texts = texts[skip_in_group:]
-
-            for lang, text in zip(langs, texts):
-                if _shutdown:
-                    checkpoint_progress("in_progress")
-                    return session_rows, session_docs, True
-
-                total_scanned_so_far = (
-                    cp["rows_scanned_in_completed_files"] + start_row + session_rows
-                )
-                if scan_limit is not None and total_scanned_so_far >= scan_limit:
-                    checkpoint_progress("in_progress")
-                    return session_rows, session_docs, False
-
-                session_rows += 1
-
-                if lang == TARGET_LANG:
-                    tokens = tokenize(text or "")
-                    session_tokens += len(tokens)
-
-                    doc_words: set = set()
-                    for tok in tokens:
-                        word_counts[tok] += 1
-                        doc_words.add(tok)
-                    for w in doc_words:
-                        doc_counts[w] += 1
-                    session_docs += 1
-
-                if session_rows % COMMIT_EVERY == 0:
-                    checkpoint_progress("in_progress")
-                    elapsed = time.time() - global_start
-                    total_scanned = (
-                        cp["rows_scanned_in_completed_files"] + cp["current_file_rows_scanned"]
-                    )
-                    total_matched = cp["docs_in_completed_files"] + cp["current_file_docs_matched"]
-                    rate = total_scanned / elapsed if elapsed > 0 else 0
-                    match_pct = 100 * total_matched / total_scanned if total_scanned else 0
-                    print(f"  [{fname}] {cp['current_file_rows_scanned']:,}/{total_rows:,} scanned"
-                          f" | {total_matched:,} ro docs ({match_pct:.2f}%) | "
-                          f"{rate:.0f} rows/s", flush=True)
-
-    checkpoint_progress("in_progress")
-    return session_rows, session_docs, False
+def input_manifest() -> dict:
+    files = list_parquet_files()
+    return {"repo": HF_PARQUET_DIR, "files": [f.rsplit("/", 1)[-1] for f in files]}
 
 
 # ---------------------------------------------------------------------------
@@ -329,113 +178,115 @@ def process_file(
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    global CHECKPOINT
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Ingest CC-News RO into source_counts")
     parser.add_argument("--test", action="store_true",
-                         help="Scan first 200k rows of shard 0 only, no resume")
+                         help="Scan the first 200k rows, into a new experiment database")
     parser.add_argument("--limit", type=int,
-                         help="Stop after N total rows scanned (not matched docs)")
-    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+                         help="Stop at absolute scanned row N (not matched docs)")
+    parser.add_argument("--resume", action="store_true",
+                         help="Continue the generation stored in the database")
+    parser.add_argument("--db", type=Path, default=None,
+                         help="Target database (default data/wrodfreq.db)")
     args = parser.parse_args()
 
-    if args.test:
-        # --test already means "no resume"; also keep it from writing progress
-        # into the real checkpoint, which a later --resume would trust even
-        # though this run's counts went into --db, not the production DB.
-        CHECKPOINT = CHECKPOINT.with_name(CHECKPOINT.stem + ".test.json")
-
+    try:
+        db_path = target_db(SOURCE_ID, args.db, args.test, args.resume)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     scan_limit = 200_000 if args.test else args.limit
 
-    conn = connect(args.db)
-    ensure_source_row(conn)
+    conn = connect(db_path)
+    try:
+        session = begin(conn, SPEC, resume=args.resume, initial_cursor=empty_cursor(),
+                        input_manifest=input_manifest)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        conn.close()
+        return 2
+    if session.finished:
+        conn.close()
+        return 0
 
-    cp = load_checkpoint() if args.resume else _empty_checkpoint()
-    completed_set = set(cp["completed_files"])
-    total_scanned = cp["rows_scanned_in_completed_files"] + cp["current_file_rows_scanned"]
-    if args.resume and total_scanned:
-        print(f"Resuming: {len(completed_set)} files done, {total_scanned:,} rows scanned, "
-              f"{cp['docs_in_completed_files']:,} ro docs so far")
+    cursor = dict(session.cursor)
+    all_files = [f"{HF_PARQUET_DIR}/{name}" for name in session.input_manifest["files"]]
+    done = set(cursor["completed_files"])
+    print(f"  {len(all_files)} shards, {len(all_files) - len(done)} remaining", flush=True)
 
-    print("Listing CC-News parquet files...")
-    all_files = list_parquet_files()
-    remaining = sum(1 for f in all_files if f.rsplit("/", 1)[-1] not in completed_set)
-    print(f"  {len(all_files)} total shards, {remaining} remaining\n")
-
+    batch = Batch(session)
     global_start = time.time()
+    since_commit = 0
 
     for hf_path in all_files:
         fname = hf_path.rsplit("/", 1)[-1]
-        if fname in completed_set:
+        if fname in done:
             continue
+        if cursor["current_file"] != fname:
+            cursor.update(current_file=fname, current_file_rows_scanned=0,
+                          current_file_docs_matched=0, current_file_tokens_done=0)
 
-        if cp["current_file"] == fname:
-            start_row = cp["current_file_rows_scanned"]
-        else:
-            start_row = 0
-            cp["current_file"] = fname
-            cp["current_file_rows_scanned"] = 0
-            cp["current_file_docs_matched"] = 0
-            cp["current_file_tokens_done"] = 0
-            save_checkpoint(cp)
+        rows = iter_rows(hf_path, cursor["current_file_rows_scanned"])
+        stop = None
+        while True:
+            if _shutdown:
+                stop = "signal"
+                break
+            if scan_limit is not None and (cursor["rows_scanned_in_completed_files"]
+                                           + cursor["current_file_rows_scanned"]) >= scan_limit:
+                stop = "limit"
+                break
+            try:
+                lang, text = next(rows)
+            except StopIteration:
+                break
+            except Exception as exc:          # network: commit what was read, then retry
+                print(f"  [{fname}] read error: {exc!r} — committing and exiting; "
+                      f"restart with --resume", flush=True)
+                stop = "error"
+                break
+            cursor["current_file_rows_scanned"] += 1
+            since_commit += 1
+            if lang == TARGET_LANG:
+                tokens = tokenize(text or "")
+                batch.add_document(tokens)
+                cursor["current_file_docs_matched"] += 1
+                cursor["current_file_tokens_done"] += len(tokens)
+            if since_commit >= COMMIT_EVERY:
+                batch.commit(cursor)
+                since_commit = 0
+                scanned = (cursor["rows_scanned_in_completed_files"]
+                           + cursor["current_file_rows_scanned"])
+                matched = cursor["docs_in_completed_files"] + cursor["current_file_docs_matched"]
+                elapsed = time.time() - global_start
+                print(f"  [{fname}] {cursor['current_file_rows_scanned']:,} scanned | "
+                      f"{matched:,} ro docs ({100 * matched / max(scanned, 1):.2f}%) | "
+                      f"{scanned / elapsed if elapsed > 0 else 0:.0f} rows/s", flush=True)
 
-        _rows, _docs, shutdown = process_file(
-            hf_path, conn, cp, start_row, scan_limit, global_start
-        )
-
-        if shutdown:
+        if stop is not None:
+            batch.commit(cursor)
             conn.close()
+            if stop == "limit":
+                print(f"\nScan limit of {scan_limit:,} rows reached.")
+                return 0
             return 1
 
-        if scan_limit is not None:
-            total = cp["rows_scanned_in_completed_files"] + cp["current_file_rows_scanned"]
-            if total >= scan_limit:
-                print(f"\nScan limit of {scan_limit:,} rows reached.")
-                conn.close()
-                return 0
+        cursor["completed_files"].append(fname)
+        cursor["rows_scanned_in_completed_files"] += cursor["current_file_rows_scanned"]
+        cursor["docs_in_completed_files"] += cursor["current_file_docs_matched"]
+        cursor["tokens_in_completed_files"] += cursor["current_file_tokens_done"]
+        cursor.update(current_file=None, current_file_rows_scanned=0,
+                      current_file_docs_matched=0, current_file_tokens_done=0)
+        done.add(fname)
+        batch.commit(cursor)
+        since_commit = 0
+        print(f"  [{fname}] complete — {len(done)}/{len(all_files)} files, "
+              f"{cursor['docs_in_completed_files']:,} ro docs, "
+              f"{(time.time() - global_start) / 3600:.1f}h elapsed\n", flush=True)
 
-        cp["completed_files"].append(fname)
-        cp["rows_scanned_in_completed_files"] += cp["current_file_rows_scanned"]
-        cp["docs_in_completed_files"] += cp["current_file_docs_matched"]
-        cp["tokens_in_completed_files"] += cp["current_file_tokens_done"]
-        cp["current_file"] = None
-        cp["current_file_rows_scanned"] = 0
-        cp["current_file_docs_matched"] = 0
-        cp["current_file_tokens_done"] = 0
-        completed_set.add(fname)
-        save_checkpoint(cp)
-
-        elapsed = time.time() - global_start
-        print(f"  [{fname}] complete — {len(completed_set)}/{len(all_files)} files, "
-              f"{cp['docs_in_completed_files']:,} ro docs, {elapsed / 3600:.1f}h elapsed\n",
-              flush=True)
-
-    # All files done
-    elapsed = time.time() - global_start
-    flush(conn, defaultdict(int), defaultdict(int),
-          cp["tokens_in_completed_files"], cp["docs_in_completed_files"], "completed")
-
-    unique_words = conn.execute(
-        "SELECT COUNT(*) FROM source_counts WHERE source_id = ?", (SOURCE_ID,)
-    ).fetchone()[0]
-    print(f"\nDone: {cp['rows_scanned_in_completed_files']:,} rows scanned, "
-          f"{cp['docs_in_completed_files']:,} ro docs, "
-          f"{cp['tokens_in_completed_files']:,} tokens in "
-          f"{elapsed:.0f}s ({elapsed / 3600:.1f}h)")
-    print(f"Unique words: {unique_words:,}")
-
-    rows = conn.execute(
-        """
-        SELECT word, occurrences, documents FROM source_counts
-        WHERE source_id = ? ORDER BY occurrences DESC LIMIT 20
-        """,
-        (SOURCE_ID,),
-    ).fetchall()
-    if rows:
-        print("\nTop 20 by occurrence:")
-        for word, occurrences, documents in rows:
-            print(f"  {word:20s} {occurrences:>12,}  ({documents:,} docs)")
-
+    batch.commit(cursor, complete=True)
+    print(f"\nDone: {cursor['rows_scanned_in_completed_files']:,} rows scanned, "
+          f"{cursor['docs_in_completed_files']:,} ro docs, "
+          f"{cursor['tokens_in_completed_files']:,} tokens", flush=True)
     conn.close()
     return 0
 

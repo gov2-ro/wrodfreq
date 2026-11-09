@@ -137,21 +137,29 @@ Follow oțios's "one script per pipeline stage" convention; every stage resumabl
 idempotent. The pipeline, in order:
 
 ```bash
-python build/ingest_wiki.py       # then news, subs, eu, web, social — writes source_counts + sources
-python build/compute_zipf.py      # per-source zipf + reliable flag
-python build/merge.py             # trimmed mean → merged
-python build/build_lemma_layer.py # needs inflected_forms.db; optional
-python build/build_package.py     # → wrodfreq/data/ro_{surface,by_source,lemma}.msgpack.xz
-                                  #   (rows with 3+ hyphens are left out of the package, not the db)
-python build/export_tsv.py        # → release/ro_surface.tsv.gz, the same rows as the package
-python build/validate.py          # must run in CI and fail the build
+python build/ingest_wiki.py       # then news, subs, eu, web, social — counts + ingest_state (ADR-004)
+python build/adopt_legacy.py      # once: seal completed pre-ADR-004 sources (never replays JSON)
+python build/compute_zipf.py      # stage 2: exact per-source replacement; refuses non-conserving counts
+python build/merge.py             # trimmed mean → merged; refuses stale stage 2
+python build/build_lemma_layer.py # needs inflected_forms.db; optional; matched-panel ratio (ADR-005)
+python build/build_manifest.py --db DB --build-date YYYY-MM-DD --out inputs.json   # names the build
+python build/build_package.py --db DB --manifest inputs.json --out-root data/builds
+                                  # → data/builds/<build_id>/ (msgpack.xz ×2–3, TSV, result.json last)
+python build/validate.py --db DB --generation data/builds/<id> --strict --report r.json  # READ-ONLY
+python build/check_rebuild.py --db DB --generation data/builds/<id> --work-dir SCRATCH
+python build/make_distribution.py --generation ... --validation r.json --out BUNDLE --tar
+python build/check_release.py --bundle BUNDLE.tar.gz --expected-sha256 HEX --install-test
+python build/build_package.py --install data/builds/<id>   # put one generation into wrodfreq/data/
 ```
 
-Ingesters are multi-hour to multi-day jobs that *will* be killed — checkpoint from the
-first commit, and run them under the status/health-check/audit triad.
+Ingesters are multi-hour to multi-day jobs that *will* be killed — progress commits with the
+counts in `ingest_state`, and `--test` always writes to a new database under
+`data/experiments/`. Run them under the status/health-check/audit triad.
 Tests: `python -m pytest -q` (no data files needed). Release gate: `.github/workflows/release-check.yml`
-on a `v*` tag; `validate.py` itself cannot run in CI (the 4 GB database is not in git) — run it
-locally before tagging.
+checks the prepared candidate bundle (URL + SHA-256); the 4 GB database is not in git, so run
+`validate.py --strict` locally and ship its hash-bound report inside the bundle
+(`docs/release-runbook.md`). Never run a stage against `data/wrodfreq.db` to "inspect" it —
+use `build/integrity.py` or `validate.py`, which open it read-only.
 
 ## Validation is the gate
 
@@ -162,8 +170,9 @@ the denominator is wrong. Then: **conditional pairwise concordance ≥ 0.93** ag
 no longer gated — it scores `wordfreq`'s own ties; spec §11.2); ~60 hand-written monotone
 pairs; ≥95% coverage of DEX lemmas with `frequency ≥ 0.8` (a gap means the vocabulary
 filter crept back); a printed top-100-by-`spread` report to read by eye; and
-**idempotence** — re-running stages 2–5 on unchanged `source_counts` must produce a
-byte-identical data file.
+**idempotence** — `build/check_rebuild.py` reruns stages 2–5 from the raw counts in a
+disposable copy and must produce byte-identical files (ADR-006). The validator itself is
+read-only and `--strict` fails any skipped check.
 
 ## Build order
 

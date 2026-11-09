@@ -38,6 +38,8 @@ release/
 *.csv
 *.parquet
 wrodfreq/data/*.msgpack.xz
+wrodfreq/data/build.json
+*.tmp
 
 # OS
 .DS_Store

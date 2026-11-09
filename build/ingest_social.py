@@ -93,9 +93,14 @@ than absent fields.
 ## Usage
 
     python build/ingest_social.py --calibrate     # language filter report, no writes
-    python build/ingest_social.py --test          # first 50k records/file, no resume
-    python build/ingest_social.py                 # full run
-    python build/ingest_social.py --resume        # pick up from checkpoint
+    python build/ingest_social.py --test          # first 50k records/file, new experiment db
+    python build/ingest_social.py                 # full run (refuses existing social counts)
+    python build/ingest_social.py --resume        # continue the generation stored in the db
+    python build/ingest_social.py --limit N       # stop at absolute record N of each file
+
+`--limit N` is an absolute per-file position: a run consumes records up to N of each
+file and records N as that file's cursor. `--limit 1`, then `--resume --limit 2`, then
+`--resume` counts exactly what one unbounded run counts.
 
 Restart loop (stop automatically on success):
     while true; do
@@ -104,27 +109,33 @@ Restart loop (stop automatically on success):
         echo "[$(date)] restarting in 15s..." && sleep 15
     done
 
-Output: data/wrodfreq.db, source_id='social'.
-Checkpoint: data/checkpoints/social_checkpoint.json
+Output: data/wrodfreq.db, source_id='social'. Progress: `ingest_state` in the same db,
+committed with the counts (ADR-004). The input manifest is the name, size and SHA-256
+of every dump file; a resume against changed dumps is refused. The old JSON checkpoints
+in data/checkpoints/ are not read: a `--test` run once added its counts to the real
+ones through them (brief B7, finding A01).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import inspect
 import json
 import os
 import re
 import signal
-import sqlite3
 import sys
 import time
-from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from wrodfreq.db import DEFAULT_DB_PATH, connect
+from ingest_state import Batch, IngestRefused, SourceSpec, begin, target_db
+from wrodfreq.db import connect
 from wrodfreq.tokenizer import tokenize
 
 SOURCE_ID    = "social"
@@ -137,9 +148,10 @@ REGISTER     = "social"
 PERIOD       = "contemporary"
 
 RAW_DIR    = Path("data/raw/social")
-CHECKPOINT = Path("data/checkpoints/social_checkpoint.json")
+FETCH_CHECKPOINT = Path("data/checkpoints/social_fetch.json")
 
-COMMIT_EVERY = 200_000          # records between DB commits
+COMMIT_EVERY = 200_000          # records consumed between commits
+CURSOR_VERSION = 1
 ZSTD_WINDOW  = 2 ** 31          # these dumps need a 2GiB window or they fail to decode
 READ_CHUNK   = 2 ** 27
 
@@ -153,7 +165,7 @@ def _handle_signal(sig, frame):
         # 2026-09-06): a raised SystemExit can hang behind a stuck non-daemon
         # thread, os._exit() cannot.
         print(f"\n[{datetime.now()}] second signal {sig} — forcing immediate exit "
-              f"(progress since the last checkpoint is lost)", flush=True)
+              f"(the uncommitted batch is lost and will be re-read)", flush=True)
         os._exit(1)
     print(f"\n[{datetime.now()}] signal {sig} — flushing and exiting after current batch "
           f"(press again to force quit)", flush=True)
@@ -358,80 +370,76 @@ def dump_files(raw_dir: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Database
+# Generation identity
 # ---------------------------------------------------------------------------
 
-def ensure_source_row(conn: sqlite3.Connection, period_note: str) -> None:
-    conn.execute(
-        """
-        INSERT INTO sources (source_id, display_name, url, licence, register,
-                              period, period_note, total_tokens, total_docs, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'in_progress')
-        ON CONFLICT(source_id) DO UPDATE SET period_note = excluded.period_note
-        """,
-        (SOURCE_ID, DISPLAY_NAME, URL, LICENCE, REGISTER, PERIOD, period_note),
-    )
-    conn.commit()
-
-
-def flush(conn: sqlite3.Connection, word_counts: dict, doc_counts: dict,
-          total_tokens: int, total_docs: int, status: str) -> None:
-    if word_counts:
-        conn.executemany(
-            """
-            INSERT INTO source_counts (word, source_id, occurrences, documents)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(word, source_id) DO UPDATE SET
-                occurrences = occurrences + excluded.occurrences,
-                documents   = documents   + excluded.documents
-            """,
-            [(w, SOURCE_ID, c, doc_counts[w]) for w, c in word_counts.items()],
-        )
-        word_counts.clear()
-        doc_counts.clear()
-    conn.execute(
-        """
-        UPDATE sources SET total_tokens = ?, total_docs = ?, status = ?,
-                            ingested_at = ?
-        WHERE source_id = ?
-        """,
-        (total_tokens, total_docs, status,
-         datetime.now(timezone.utc).isoformat(), SOURCE_ID),
-    )
-    conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------------------------
-
-def _empty_checkpoint() -> dict:
+def policy() -> dict:
+    """Everything that decides which records and tokens this source contributes."""
     return {
-        "files_done": {},      # filename -> records read (complete files keep their count)
-        "files_complete": [],
-        "tokens_done": 0,
-        "docs_done": 0,
-        "authors": [],         # distinct authors seen, for the independence measure
-        "author_comment_counts": {},
+        "policy_version": 1,
+        "functions": {f.__name__: inspect.getsource(f) for f in
+                      (clean_markdown, language_signals, looks_romanian, record_text)},
+        "ro_markers": sorted(RO_MARKERS),
+        "en_markers": sorted(EN_MARKERS),
+        "patterns": [r.pattern for r in (_URL_RE, _REDDIT_REF, _MD_LINK_RE, _ENTITY_RE,
+                                         _CODE_RE)],
+        "unit": "comment-or-submission",
     }
 
 
-def load_checkpoint() -> dict:
-    if CHECKPOINT.exists():
-        try:
-            cp = _empty_checkpoint()
-            cp.update(json.loads(CHECKPOINT.read_text()))
-            return cp
-        except (json.JSONDecodeError, ValueError):
-            print("warning: corrupted checkpoint, starting fresh")
-    return _empty_checkpoint()
+def spec() -> SourceSpec:
+    return SourceSpec(
+        source_id=SOURCE_ID, display_name=DISPLAY_NAME, url=URL, licence=LICENCE,
+        register=REGISTER, period=PERIOD,
+        period_note="ingest in progress — independence not yet measured",
+        cursor_version=CURSOR_VERSION, policy=policy())
 
 
-def save_checkpoint(cp: dict) -> None:
-    CHECKPOINT.parent.mkdir(parents=True, exist_ok=True)
-    tmp = CHECKPOINT.with_suffix(".tmp")
-    tmp.write_text(json.dumps(cp))
-    tmp.replace(CHECKPOINT)
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def input_manifest(files: list[Path]) -> dict:
+    return {"files": [{"name": f.name, "size": f.stat().st_size, "sha256": sha256_file(f)}
+                      for f in files]}
+
+
+def empty_cursor() -> dict:
+    return {
+        "files_done": {},      # filename -> nonblank records consumed (absolute position)
+        "files_complete": [],
+        "tokens_done": 0,
+        "docs_done": 0,
+        "author_comment_counts": {},
+        "file_stats": {},
+    }
+
+
+def _zero_stats() -> dict:
+    return {"records": 0, "malformed": 0, "rejected": 0, "no_tokens": 0,
+            "not_romanian": 0, "kept": 0, "tokens": 0}
+
+
+def fetch_comparison(cursor: dict, fetch_checkpoint: Path) -> dict | None:
+    """Records read per dump file vs. the count the fetcher recorded for it."""
+    if not fetch_checkpoint.exists():
+        return None
+    try:
+        fetched = json.loads(fetch_checkpoint.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    out = {}
+    for name, stats in sorted(cursor["file_stats"].items()):
+        stem = name.removesuffix(".zst")
+        sub, _, kind = stem.rpartition("_")
+        expected = fetched.get(f"{sub}/{kind}", {}).get("count")
+        out[name] = {"read": stats["records"], "fetch_count": expected,
+                     "difference": None if expected is None else stats["records"] - expected}
+    return out
 
 
 def independence_note(author_counts: Counter, total_docs: int, files: list[Path]) -> str:
@@ -566,8 +574,7 @@ def calibrate(files: list[Path], sample: int) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    global CHECKPOINT
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Ingest Romanian subreddit dumps into source_counts")
     parser.add_argument("--raw-dir", type=Path, default=RAW_DIR,
                         help="Directory of *.zst per-subreddit dumps")
     parser.add_argument("--calibrate", action="store_true",
@@ -575,145 +582,150 @@ def main() -> int:
     parser.add_argument("--calibrate-sample", type=int, default=100_000,
                         help="Records per file to sample when calibrating")
     parser.add_argument("--test", action="store_true",
-                        help="First 50k records per file, separate checkpoint")
-    parser.add_argument("--limit", type=int, help="Stop after N records per file")
-    parser.add_argument("--resume", action="store_true", help="Resume from checkpoint")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+                        help="First 50k records per file, into a new experiment database")
+    parser.add_argument("--limit", type=int,
+                        help="Stop at absolute record N of each file (across sessions)")
+    parser.add_argument("--resume", action="store_true",
+                        help="Continue the generation stored in the database")
+    parser.add_argument("--db", type=Path, default=None,
+                        help="Target database (default data/wrodfreq.db)")
+    parser.add_argument("--fetch-checkpoint", type=Path, default=FETCH_CHECKPOINT,
+                        help="Fetcher state to compare per-file record counts against")
     args = parser.parse_args()
 
     files = dump_files(args.raw_dir)
     if not files:
-        print(f"No *.zst dumps found in {args.raw_dir}/\n\n"
-              f"Download at least Romania_comments.zst and Romania_submissions.zst\n"
-              f"from the Academic Torrents per-subreddit release and put them there —\n"
-              f"see this module's docstring for the torrent link and why this step\n"
-              f"cannot be automated.", file=sys.stderr)
+        print(f"No *.zst dumps found in {args.raw_dir}/ — run build/fetch_social.py first.",
+              file=sys.stderr)
         return 1
     print(f"Found {len(files)} dump file(s): {', '.join(f.name for f in files)}", flush=True)
 
     if args.calibrate:
         return calibrate(files, args.calibrate_sample)
 
-    if args.test:
-        CHECKPOINT = CHECKPOINT.with_name(CHECKPOINT.stem + ".test.json")
+    try:
+        db_path = target_db(SOURCE_ID, args.db, args.test, args.resume)
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
     record_limit = 50_000 if args.test else args.limit
 
-    cp = load_checkpoint() if args.resume else _empty_checkpoint()
-    author_counts = Counter(cp.get("author_comment_counts", {}))
+    conn = connect(db_path)
+    try:
+        session = begin(conn, spec(), resume=args.resume, initial_cursor=empty_cursor(),
+                        input_manifest=lambda: input_manifest(files))
+    except IngestRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        conn.close()
+        return 2
+    if session.finished:
+        conn.close()
+        return 0
 
-    conn = connect(args.db)
-    ensure_source_row(conn, "ingest in progress — independence not yet measured")
-
-    word_counts: dict[str, int] = defaultdict(int)
-    doc_counts: dict[str, int] = defaultdict(int)
-    total_tokens = cp["tokens_done"]
-    total_docs = cp["docs_done"]
-    since_commit = 0
+    cursor = json.loads(json.dumps(session.cursor))
+    author_counts = Counter(cursor["author_comment_counts"])
+    batch = Batch(session)
     start = time.time()
-    # Whether every file ran to its natural end. A --limit/--test run must NOT
-    # mark the source 'completed': wrodfreq/db.py's eligible_sources() selects
-    # on exactly that value, so a truncated ingest would silently enter the
-    # merge as if it were the whole corpus. Same class of footgun as
-    # ingest_news.py's --test/--db one (activity-history 2026-09-06).
-    ran_to_completion = True
+    since_commit = 0
+
+    def commit(complete: bool = False, **kw) -> None:
+        nonlocal since_commit
+        cursor["author_comment_counts"] = dict(author_counts)
+        batch.commit(cursor, complete=complete, **kw)
+        since_commit = 0
 
     for path in files:
         if _shutdown:
-            ran_to_completion = False
             break
-        if path.name in cp["files_complete"]:
-            print(f"  [{path.name}] already complete, skipping", flush=True)
+        name = path.name
+        if name in cursor["files_complete"]:
+            print(f"  [{name}] already complete, skipping", flush=True)
             continue
-
-        already = cp["files_done"].get(path.name, 0)
+        already = cursor["files_done"].get(name, 0)
+        stats = cursor["file_stats"].setdefault(name, _zero_stats())
         if already:
-            print(f"  [{path.name}] resuming — skipping first {already:,} records "
+            print(f"  [{name}] resuming — skipping first {already:,} records "
                   f"(re-reading, zstd has no seek)", flush=True)
         else:
-            print(f"  [{path.name}] starting", flush=True)
+            print(f"  [{name}] starting", flush=True)
 
         seen = 0
-        kept = 0
+        stopped = False
         for line in read_lines_zst(path):
             if _shutdown:
+                stopped = True
                 break
             line = line.strip()
             if not line:
                 continue
-            seen += 1
-            if seen <= already:
+            if seen < already:
+                seen += 1
                 continue
-            if record_limit and seen > record_limit:
-                ran_to_completion = False
+            if record_limit is not None and seen >= record_limit:
+                stopped = True              # record N+1 is not consumed
                 break
+            seen += 1
+            cursor["files_done"][name] = seen
+            stats["records"] += 1
+            since_commit += 1
 
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                rec = None
+            if not isinstance(rec, dict):
+                stats["malformed"] += 1
+            else:
+                text = record_text(rec)
+                tokens = tokenize(clean_markdown(text)) if text is not None else None
+                if text is None:
+                    stats["rejected"] += 1
+                elif not tokens:
+                    stats["no_tokens"] += 1
+                elif not looks_romanian(tokens):
+                    stats["not_romanian"] += 1
+                else:
+                    stats["kept"] += 1
+                    stats["tokens"] += len(tokens)
+                    cursor["docs_done"] += 1
+                    cursor["tokens_done"] += len(tokens)
+                    author_counts[rec.get("author") or "[unknown]"] += 1
+                    batch.add_document(tokens)
 
-            text = record_text(rec)
-            if text is None:
-                continue
-            tokens = tokenize(clean_markdown(text))
-            if not tokens or not looks_romanian(tokens):
-                continue
-
-            kept += 1
-            total_docs += 1
-            total_tokens += len(tokens)
-            author = rec.get("author") or "[unknown]"
-            author_counts[author] += 1
-
-            for w in tokens:
-                word_counts[w] += 1
-            for w in set(tokens):          # `documents` = one per doc per word
-                doc_counts[w] += 1
-
-            since_commit += 1
             if since_commit >= COMMIT_EVERY:
-                flush(conn, word_counts, doc_counts, total_tokens, total_docs,
-                      "in_progress")
-                cp["files_done"][path.name] = seen
-                cp["tokens_done"] = total_tokens
-                cp["docs_done"] = total_docs
-                cp["author_comment_counts"] = dict(author_counts)
-                save_checkpoint(cp)
-                since_commit = 0
-                elapsed = time.time() - start
-                print(f"    [{path.name}] {seen:,} read, {kept:,} kept, "
-                      f"{total_tokens:,} tokens | {elapsed/60:.1f}m", flush=True)
+                commit()
+                print(f"    [{name}] {seen:,} read, {stats['kept']:,} kept, "
+                      f"{cursor['tokens_done']:,} tokens | {(time.time() - start) / 60:.1f}m",
+                      flush=True)
 
-        flush(conn, word_counts, doc_counts, total_tokens, total_docs, "in_progress")
-        cp["files_done"][path.name] = seen
-        cp["tokens_done"] = total_tokens
-        cp["docs_done"] = total_docs
-        cp["author_comment_counts"] = dict(author_counts)
-        if not _shutdown and not record_limit:
-            cp["files_complete"].append(path.name)
-            print(f"  [{path.name}] complete: {seen:,} records read, {kept:,} kept", flush=True)
-        save_checkpoint(cp)
+        if not stopped:
+            cursor["files_complete"] = sorted({*cursor["files_complete"], name})
+            print(f"  [{name}] complete: {stats['records']:,} records read, "
+                  f"{stats['malformed']:,} malformed, {stats['rejected']:,} rejected, "
+                  f"{stats['no_tokens'] + stats['not_romanian']:,} filtered, "
+                  f"{stats['kept']:,} kept, {stats['tokens']:,} tokens", flush=True)
+        commit()
 
-    status = "completed" if (ran_to_completion and not _shutdown) else "in_progress"
-    flush(conn, word_counts, doc_counts, total_tokens, total_docs, status)
-
-    if status == "completed":
-        note = independence_note(author_counts, total_docs, files)
-        conn.execute("UPDATE sources SET period_note = ? WHERE source_id = ?",
-                     (note, SOURCE_ID))
-        conn.commit()
+    complete = all(f.name in cursor["files_complete"] for f in files)
+    if complete:
+        note = independence_note(author_counts, cursor["docs_done"], files)
+        comparison = fetch_comparison(cursor, args.fetch_checkpoint)
+        commit(complete=True, period_note=note,
+               provenance={"file_stats": cursor["file_stats"], "fetch_comparison": comparison})
         print(f"\n{note}")
-
-    print(f"\n{SOURCE_ID}: {total_docs:,} documents, {total_tokens:,} tokens, "
-          f"status={status}, {(time.time()-start)/60:.1f}m", flush=True)
-    if status != "completed" and not _shutdown:
-        print("  (status stays 'in_progress' because this run was truncated by "
-              "--test/--limit — merge.py will correctly ignore this source)", flush=True)
-    if status == "completed":
-        print("Next: python build/compute_zipf.py --source social, then merge.py, "
-              "build_lemma_layer.py, build_package.py, validate.py")
+        if comparison:
+            off = {n: c for n, c in comparison.items() if c["difference"] not in (0, None)}
+            print(f"fetch comparison: {len(comparison) - len(off)}/{len(comparison)} files "
+                  f"match the fetcher's record count"
+                  + "".join(f"\n  {n}: read {c['read']:,}, fetcher {c['fetch_count']:,}"
+                            for n, c in off.items()))
+    print(f"\n{SOURCE_ID}: {cursor['docs_done']:,} documents, {cursor['tokens_done']:,} tokens, "
+          f"{'completed' if complete else 'in_progress'}, {(time.time() - start) / 60:.1f}m",
+          flush=True)
     conn.close()
-    return 0 if status == "completed" else 1
+    if complete:
+        return 0
+    return 1 if _shutdown else 0
 
 
 if __name__ == "__main__":

@@ -283,9 +283,14 @@ CREATE TABLE lemma_zipf (
   zipf            REAL NOT NULL,
   n_forms         INTEGER NOT NULL,
   zipf_headword   REAL,                -- the citation form alone, for comparison
-  family_ratio    REAL                 -- undivided family total / disambiguated total
+  family_ratio    REAL                 -- loose / disambiguated total, same source panel (ADR-005)
 ) WITHOUT ROWID;
 ```
+
+*Amended 2026-11-09 (ADR-004, ADR-006).* `wrodfreq/db.py` adds three bookkeeping tables:
+`db_meta` (the database's own `db_id`), `ingest_state` (the authoritative ingest cursor,
+generation, sequence, policy and input fingerprints, committed with the counts) and
+`stage_state` (what each derived stage was computed from).
 
 ### 7.2 Stage 1 — `ingest_<source>.py`
 
@@ -293,7 +298,12 @@ One per source. Streams the corpus, tokenizes, writes `source_counts` and the
 `sources` row. Requirements:
 
 - **Checkpointed**, per the `process_culturax.py` pattern. These are multi-hour jobs and
-  they will be killed.
+  they will be killed. *Amended 2026-11-09 (ADR-004):* the cursor lives in
+  `ingest_state` in the same database and commits in the **same transaction** as the
+  counts and the source totals (`build/ingest_state.py`). JSON checkpoints are no longer
+  read. A fresh run refuses a source that already has counts; `--resume` continues only
+  when the tokenizer/policy and input fingerprints still match; `--test` writes to a new
+  experiment database, never the canonical one.
 - **Memory-bounded.** With an open vocabulary the counter dict grows unboundedly on a 40B
   corpus. Use a `Counter` flushed to SQLite every N documents with `INSERT ... ON CONFLICT
   DO UPDATE SET occurrences = occurrences + excluded.occurrences`, and prune the in-memory
@@ -310,11 +320,13 @@ One per source. Streams the corpus, tokenizes, writes `source_counts` and the
 ### 7.3 Stage 2 — `compute_zipf.py`
 
 Per source: `zipf = log10(occurrences / total_tokens * 1e9)`. Sets `reliable` per §8.1.
-Pure function of `source_counts` + `sources`; safe to re-run.
+Pure function of `source_counts` + `sources`; safe to re-run. *Amended 2026-11-09
+(ADR-006):* each run **replaces** the source's rows exactly, in one transaction, after
+checking `SUM(occurrences) == total_tokens`; it records its inputs in `stage_state`.
 
 ### 7.4 Stage 3 — `merge.py`
 
-The trimmed mean, §8.2. Writes `merged`.
+The trimmed mean, §8.2. Writes `merged`. Refuses a stale stage 2 (ADR-006).
 
 ### 7.5 Stage 4 — `build_lemma_layer.py`
 
@@ -322,11 +334,15 @@ The trimmed mean, §8.2. Writes `merged`.
 
 ### 7.6 Stage 5 — `build_package.py`
 
-Compiles `merged` into the shipped data file (§10.2).
+Compiles `merged` into the shipped data file (§10.2). *Amended 2026-11-09 (ADR-006):*
+input is a build manifest (`build/build_manifest.py`) that fixes the build date and the
+`build_id`; output is one complete generation directory, `result.json` written last.
 
 ### 7.7 Stage 6 — `validate.py`
 
-§11. Must run in CI and must fail the build on a regression.
+§11. Must run in CI and must fail the build on a regression. *Amended 2026-11-09
+(ADR-006):* read-only; `--strict` fails any skipped check and is required for a release.
+The rebuild-and-compare check is `build/check_rebuild.py`.
 
 ---
 
@@ -413,7 +429,9 @@ things that will be got wrong on a re-implementation:
    that never majority-claims any form, while it still accumulates occurrences — oțios had
    170 rows in that state, `văz` at 96 occurrences and 0 documents.
 
-Publish `family_ratio` (undivided family total / disambiguated total) alongside. In oțios
+Publish `family_ratio` (undivided family total / disambiguated total) alongside,
+**computed over one source panel** (ADR-005, 2026-11-09): the sources where the
+disambiguated count is reliable, for both totals — so the ratio is ≥ 1. In oțios
 it is a variant detector — `tinereță` sits at 298×, `veșcă` at 938×, an isolated word at
 1×. As a public field it is a useful "this form shares a paradigm with something much more
 common" signal.
@@ -475,6 +493,13 @@ Target < 30 MB for the surface table so the wheel stays installable.
 Round Zipf to 2 decimals in the shipped file. The third decimal is noise and it costs
 real bytes across ~2M entries.
 
+*Amended 2026-11-09 (ADR-006).* Data format 2: every shipped file carries the build's
+`build_id`, source panel and scale, and the surface and by-source files carry
+`words_sha256`, the identity of the ordered word list. The runtime refuses a file from
+another build, a truncated array, or a format-1 file. The lemma fallback applies only
+when the build intentionally omits the lemma layer. `build_package.py --install` copies
+one verified generation into `wrodfreq/data/` together with `build.json`.
+
 The project offers its data at three levels (amended 2026-11-06; the measurements are in
 `docs/release-data-hosting.md`):
 
@@ -508,6 +533,11 @@ wrodfreq.build_info()
 # {'version': '0.3.0', 'sources': ['web','news','subs','wiki','eu'], 'built': '2026-09-01'}
 ```
 
+*Amended 2026-11-09 (ADR-006):* `build_info()` also returns `build_id`,
+`data_format_version`, `data_package_version`, `source_tokens`, `lemma_layer` and
+`words_sha256`. The original keys stay. A PATCH release may fix a build without changing
+the panel (0.2.1 rebuilt the contaminated `social` counts).
+
 Anyone citing the table in a paper needs to name the exact build. This is the field that
 makes that possible.
 
@@ -516,6 +546,16 @@ makes that possible.
 ## 11. Validation — the stage that will be skipped, so make it CI
 
 `validate.py` must fail the build. Six checks:
+
+*Amended 2026-11-09 (ADR-006).* `validate.py` is **read-only**: it never applies schema,
+rebuilds a table or touches an artifact. It adds a structural integrity check (raw
+conservation, every derived invariant recomputed), a provenance check (the database is
+the state the build manifest names) and an artifact check (the shipped files equal the
+database, TSV parity included). `--strict` turns a skipped check into a failure;
+check 2 also requires ≥ 99% coverage of wordfreq's Zipf ≥ 3 words and records the
+reference version; check 3 requires every pair to be comparable. Check 6 moved to
+`build/check_rebuild.py`, which rebuilds from raw counts in a disposable copy and
+compares files and logical table content.
 
 1. **Function words land where they should.** `de`, `și`, `la`, `un`, `cu` must fall in
    Zipf 6.0–8.0 (ADR-003). If they do not, the denominator is wrong (§3.2). **This check alone
@@ -663,6 +703,12 @@ Ported from oțios's own hard-won list. Every one of these cost real time there.
   `status.py` / `health_check.py` / `audit.py` triad exists because a 40M-document job
   was silently cycling and nobody noticed for a day.
 - **Idempotence is a testable property and the cheapest bug detector you have.** §11.6.
+- **A checker that rebuilds what it checks is not a checker.** The 0.2.0 validator
+  rebuilt stages 2–5 in place and passed a fixture whose `merged` had lost `de`
+  (ADR-006). Validation opens the database read-only.
+- **A cursor that commits apart from its counts will replay or lose a batch.** And a
+  test run that shares a database with the real one will contaminate it — 0.2.0's
+  `social` carried 30,155,307 test tokens (ADR-004).
 
 
 -----

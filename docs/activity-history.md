@@ -1408,3 +1408,134 @@ The owner added `LICENSE.txt` (EUPL 1.2) and chose CC BY-SA 4.0 for the data. Th
 The TSV stays out of git during the review, because the review can change the rows and each
 committed version adds about 34 MiB to the history. The owner shares it from Google Drive, and
 `.gitignore` holds `release/` until the review ends.
+
+## 2026-11-09 — Pipeline audit reproduced; implementation handoff B7 written
+
+Read the pipeline, specs, decisions, and tests; ran all 231 tests and the four non-mutating
+real-data quality checks (all passed). A separate read-only conservation scan found social
+counts summing to 566,678,860 against the stored denominator 536,523,553. The excess of
+30,155,307 exactly equals the social test checkpoint's token total, and a test-then-full
+fixture reproduces the additive contamination path. All five other sources conserve counts.
+The lemma layer contains 2,382 ratios below one (`detoxica` about 0.03294, shipped as 0.03),
+traced to independently selected source panels for the numerator and denominator.
+
+Temporary fixtures confirmed replay after a committed batch but before JSON checkpointing,
+completed EU resume resetting a migrated denominator, bounded social fetch overwriting its
+earlier prefix, a limit/resume ingest skipping a record, deleted raw words surviving stage 2,
+validation returning success before leaving a rebuilt table without required `de`, changing
+payloads on different dates, and equal-count mixed files mislabelling source frequencies.
+
+At the owner's request, wrote the implementation and staged-repair plan in
+`docs/briefs/B7-pipeline-audit-remediation.md`, including B4's recovery cases, concrete design
+choices, regression matrix, strict read-only validation, manifest-bound distributions, a
+social-only raw rebuild, and full downstream candidate verification. Preserved the portable
+baseline diagnostic as `docs/briefs/B7-audit-reproduce.py`; it uses temporary files and no
+private data or network. Updated BACKLOG and NEXT-SESSION to point to the handoff.
+**This session prepared the plan only. No pipeline implementation or production data changed.**
+
+## 2026-11-09 — B7 implemented: transactional ingest, exact stages, build identity, social rebuilt in staging
+
+Implemented brief B7 end to end, in its order, then produced the 0.2.1 candidate in
+staging. The baseline database, package blobs, review TSV, legacy checkpoints and raw
+dumps were not modified (SHA-256 before and after in `data/audit/2026-11-09-b7-baseline/`).
+
+**Phase 0.** `build/inventory.py` froze the baseline (commit, versions, sizes, hashes,
+source metadata). `build/integrity.py` is a read-only, streaming checker: per-source
+conservation, valid token keys, recomputed stage-2 values, every `merged` row recomputed
+from the panel, lemma invariants. On the real 0.2.0 database it found exactly the two
+audit defects and nothing else — `token_sum_mismatch [social]` (+30,155,307) and 2,382
+`family_ratio < 1` — in 202 s and 22 MB, database bytes unchanged.
+
+**Phase 1 (A01, A03, A04, A05; ADR-004).** `build/ingest_state.py` gives all six ingesters
+one transaction per batch: counts, totals and cursor commit together in `ingest_state`,
+with generation/sequence checks, policy and input fingerprints, and the owning `db_id`.
+Fresh runs refuse existing data; `--test` writes to `data/experiments/`; JSON checkpoints
+are no longer read. `build/adopt_legacy.py` seals completed, conserving legacy sources;
+migrations bump the sequence. Social `--limit N` now records N. Tests run the real
+adapters with offline fakes, kill them in-process and in subprocesses at each transaction
+boundary, and require the resumed result to equal a clean run.
+
+**Phase 2 (A05, B4).** `fetch_social.py` never compacts an unfinished crawl; finalization
+is a five-step recoverable state machine (durable log, exhaustion recorded, streamed
+compression to a temp file, verification, atomic replace, identity recorded, log removed).
+All seven B4 gaps closed; B4 marked completed. Tests compare decoded records.
+
+**Phase 3 (A06, A07; ADR-005).** Stage 2 replaces each source's rows exactly, in one
+transaction, after a conservation check. Stages record their inputs in `stage_state`;
+merge and lemma refuse stale input. `family_ratio` uses one panel for both totals; the
+brief's fixture gives 2 (was ~0.0015) with lemma Zipf unchanged.
+
+**Phase 4 (A09; ADR-006).** `build/build_manifest.py` names a build (fixed date, code and
+tokenizer hashes, panel with generations and count hashes, stage runs, DEX identities,
+synthetic/lemma flags); `build_id` is its hash. Data format 2 carries the build id, panel,
+scale and word-list hash in every file; the runtime refuses mixed, truncated or format-1
+files. Generations are written to a hidden directory, `result.json` last, then renamed.
+
+**Phase 5 (A02, A08; ADR-006).** `validate.py` is read-only with `--strict` and a JSON
+report; check 6 moved to `build/check_rebuild.py`. `make_distribution.py` builds the sdist
+and the wheel from that sdist out of one generation; `check_release.py` checks a bundle.
+CI now builds and installs a synthetic bundle (lemma present and absent) outside the
+checkout; the release workflow checks a real candidate by URL and SHA-256 and fails
+without one. Version 0.2.1. `build` added to the `dev` extra.
+
+**Phase 6 — the staged candidate** (`data/staging/2026-11-09-b7/`):
+
+1. Baseline logical hashes of all six sources (79 s); SQLite backup to `candidate.db`
+   (10 s); five sources sealed (`adopt_legacy.py`, 42 s) with logical hashes equal to the
+   baseline and migrated denominators preserved (eu 84,722,606).
+2. Social rebuilt into an empty `social.db` from the 30 dumps (12.3 min): 18,458,171
+   records read, 0 malformed, 1,527,106 deleted/bot/empty, 211,478 without tokens,
+   3,001,659 not Romanian, **13,717,928 kept, 536,523,553 tokens** — exactly the 0.2.0
+   denominator and document count. 30/30 files match the fetcher's record counts; dump
+   hashes equal before and after.
+3. `replace_source.py` swapped social in one transaction (1,676,641 rows, sum
+   566,678,860 → 536,523,553; state rebound to the candidate's `db_id`). Stages 2–4 rebuilt
+   (100 s, 65 s, 21 s). Manifest and package: build **`eb23d6fe219530ceb9bc65caef6475dc`**,
+   6,062,959 merged / 6,039,510 shipped words, 180,565 lemmas.
+4. Strict validation **8/8**, `release_eligible`: integrity over 33,443,218 words,
+   provenance and count hashes, function words (`de` 7.68), concordance 0.948 over
+   569,644,768 pairs with coverage 43,095/43,413 (99.27%, wordfreq 3.1.1), 59/59 pairs,
+   DEX 97.7%, no ratio below 1, artifacts equal to the database; inputs unchanged.
+
+5. Independent rebuild (`check_rebuild.py`, 13 min): raw tables copied read-only into a
+   disposable database, stages 2–5 rerun — **same build id; all six files byte-identical;
+   `source_zipf`, `merged`, `lemma_zipf`, `sources` logically identical**; the rebuilt
+   candidate also validates strictly 8/8.
+6. Comparison with 0.2.0 (`compare_builds.py`, `compare.json`): the five other sources'
+   counts are unchanged by logical hash, with zero changed per-source values. Social's
+   per-word Zipf only fell (median −0.015, p01 −0.176, min −0.301 = log10 2, a fully
+   doubled count); 13,955 words lost social reliability. `merged`: 2,036 words leave (all
+   were reliable only in social, just above its floor; none added), 11,919 lose one
+   reliable source (2→1: 5,077; 3→2: 3,133; 4→3: 2,164; 5→4: 1,295; 6→5: 250);
+   158,480 values move by more than 0.005 (median 0, p01 −0.016, extremes ±0.93 where
+   social was one of two sources). Shipped words 6,041,542 → 6,039,510. Lemmas
+   180,569 → 180,565; 25,455 lemma Zipf values move by more than 0.005; ratios below 1:
+   2,382 → **0**.
+7. Bundle (`make_distribution.py --tar`): sdist and wheel built from that sdist, 39.7 MB
+   each; tarball SHA-256 `3af9fabdafcec58d65dbce773c74aa939e5f346d0aaab86d37b423ab53347a20`.
+   `check_release.py --install-test` passes: digest verified before extraction, archives
+   carry the generation's files, the report binds this build, and the wheel installed in a
+   clean venv answers `de` = 7.68 from outside the checkout.
+8. Closing inventory: the baseline database (`f990c483…`), package blobs, review TSV, 13
+   checkpoint files, 30 dumps and the DEX map are byte-identical to the opening inventory.
+
+Two tool files changed after the manifest was frozen, so the manifest pins their previous
+hashes: `make_distribution.py` (relative paths broke when the build frontend changed
+directory) and `validate.py` (a Spearman fallback for Python < 3.12, where
+`statistics.correlation(method="ranked")` does not exist; rho is printed, not gated). No
+data path is affected; the post-commit re-manifest pins the final tree. The full suite
+(408 tests) passes on Python 3.12 and 3.10.
+
+The portable diagnostic `docs/briefs/B7-audit-reproduce.py` now fails on its first case,
+as intended; each of its ten cases is a correct-behaviour regression (COMMIT_REPLAY →
+`test_kill_at_each_boundary…`; STALE_DERIVATION → `test_removed_word_disappears…`;
+FAMILY_RATIO → `test_brief_fixture_ratio_is_two…`; REPRODUCIBILITY →
+`test_same_manifest_on_different_days…`; SMOKE_THEN_FULL → `test_social_test_then_full…`;
+SOCIAL_LIMIT_RESUME → `test_social_capped_and_resumed…`; FETCH_LIMIT_RESUME →
+`test_capped_then_continued…`; COMPLETED_EU_RESUME → `test_eu_legacy_checkpoint…`;
+VALIDATION_GATE → `test_stale_merged_fixture_fails_strict…`; MIXED_BUILD_FILES →
+`test_reordered_source_panel_is_refused`).
+
+Found on the way, not changed (BACKLOG): `top_n_list(n, lang)` takes `n` first, unlike
+`wordfreq`. The candidate's manifest names `81635a6` + `dirty: true` because the work is
+uncommitted; re-manifest after committing. Not promoted, not tagged, not published.

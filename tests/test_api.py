@@ -4,6 +4,7 @@ not the real ~37 MB build artifact, which is gitignored and may not exist.
 
 from __future__ import annotations
 
+import hashlib
 import lzma
 
 import msgpack
@@ -26,8 +27,12 @@ WORDS = {
 }
 
 
-def _make_payloads() -> tuple[dict, dict]:
+BUILD_ID = "test-build-0001"
+
+
+def _make_payloads(lemma: bool = True) -> tuple[dict, dict]:
     words = sorted(WORDS)
+    words_sha = hashlib.sha256("\n".join(words).encode()).hexdigest()
     zipf = [round(WORDS[w][0] * SCALE) for w in words]
     n_reliable = [WORDS[w][1] for w in words]
     n_attesting = [WORDS[w][2] for w in words]
@@ -37,12 +42,17 @@ def _make_payloads() -> tuple[dict, dict]:
         for w in words
     ]
     surface = {
-        "format_version": 1,
+        "format_version": 2,
+        "build_id": BUILD_ID,
         "built": "2026-01-01",
+        "package_version": "0.0.test",
         "sources": SOURCES,
         "n_sources": len(SOURCES),
+        "source_tokens": [10] * len(SOURCES),
+        "lemma": lemma,
         "zipf_scale": SCALE,
         "word_count": len(words),
+        "words_sha256": words_sha,
         "words": words,
         "zipf": zipf,
         "n_reliable": n_reliable,
@@ -50,11 +60,12 @@ def _make_payloads() -> tuple[dict, dict]:
         "spread": spread,
     }
     by_src = {
-        "format_version": 1,
-        "built": "2026-01-01",
+        "format_version": 2,
+        "build_id": BUILD_ID,
         "sources": SOURCES,
         "zipf_scale": SCALE,
         "word_count": len(words),
+        "words_sha256": words_sha,
         "by_source": by_source,
     }
     return surface, by_src
@@ -71,7 +82,9 @@ def _lemma_payload() -> dict:
     names = sorted(LEMMAS)
     q = lambda v: -1 if v is None else round(v * SCALE)
     return {
-        "format_version": 1,
+        "format_version": 2,
+        "build_id": BUILD_ID,
+        "sources": SOURCES,
         "zipf_scale": SCALE,
         "lemma_count": len(names),
         "lemmas": names,
@@ -199,6 +212,12 @@ def test_lemma_frequency_falls_back_to_the_surface_value_for_a_non_lemma():
 
 
 def test_lemma_frequency_degrades_gracefully_without_a_lemma_data_file(monkeypatch, tmp_path):
+    """A build that intentionally omits the lemma layer (e.g. DEX refuses permission)."""
+    surface, _ = _make_payloads(lemma=False)
+    path = tmp_path / "no-lemma-surface.msgpack.xz"
+    path.write_bytes(lzma.compress(msgpack.packb(surface, use_bin_type=True)))
+    monkeypatch.setattr(_surface, "SURFACE_PATH", path)
+    monkeypatch.setattr(_surface, "_surface", None)
     monkeypatch.setattr(_surface, "LEMMA_PATH", tmp_path / "absent.msgpack.xz")
     monkeypatch.setattr(_surface, "_lemmas", None)
     assert wrodfreq.lemma_detail("birjă") is None
@@ -210,6 +229,8 @@ def test_build_info_reports_the_panel():
     assert info["sources"] == SOURCES
     assert info["built"] == "2026-01-01"
     assert info["version"] == wrodfreq.__version__
+    assert info["build_id"] == BUILD_ID and info["data_format_version"] == 2
+    assert info["lemma_layer"] is True
 
 
 # ---------------------------------------------------------------------------

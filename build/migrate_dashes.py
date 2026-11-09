@@ -69,6 +69,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from wrodfreq.db import DEFAULT_DB_PATH, connect
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ingest_state import record_count_change
 from wrodfreq.tokenizer import _split_elisions
 
 DELETE_BATCH = 20_000
@@ -149,6 +152,8 @@ def migrate_source(conn: sqlite3.Connection, source_id: str, dry_run: bool) -> t
     # just disappeared (migrate_elisions.py hit the same trap — see its
     # docstring).
     conn.execute("DELETE FROM source_zipf WHERE source_id = ?", (source_id,))
+    # Same transaction: move the source's sequence on and invalidate derived stages.
+    record_count_change(conn, source_id, "migrate_dashes")
     conn.commit()
     return len(to_delete), dropped, token_delta
 

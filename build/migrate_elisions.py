@@ -53,6 +53,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from wrodfreq.db import DEFAULT_DB_PATH, connect
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ingest_state import record_count_change
 from wrodfreq.tokenizer import _split_elisions
 
 DELETE_BATCH = 20_000
@@ -115,6 +118,8 @@ def migrate_source(conn: sqlite3.Connection, source_id: str, dry_run: bool) -> t
     # its next run starts clean instead of upserting alongside 118-ish (or
     # however many) leftover rows for words like "într-o" that no longer exist.
     conn.execute("DELETE FROM source_zipf WHERE source_id = ?", (source_id,))
+    # Same transaction: move the source's sequence on and invalidate derived stages.
+    record_count_change(conn, source_id, "migrate_elisions")
     conn.commit()
     return len(to_delete), token_delta
 

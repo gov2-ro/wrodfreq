@@ -32,7 +32,7 @@ import math
 
 from wrodfreq.tokenizer import _TOKEN_RE, normalize, tokenize
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "zipf_frequency",
@@ -191,4 +191,12 @@ def build_info() -> dict:
         "version": __version__,
         "sources": data.sources,
         "built": data.built,
+        # Extensions since 0.2.1 (ADR-006): the exact build, citable.
+        "build_id": data.build_id,
+        "data_format_version": _surface.FORMAT_VERSION,
+        "data_package_version": data.package_version,
+        "source_tokens": (dict(zip(data.sources, data.source_tokens))
+                          if data.source_tokens else None),
+        "lemma_layer": data.lemma,
+        "words_sha256": data.words_sha256,
     }

@@ -4,6 +4,40 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
 
 ---
 
+- [x] **Repair the audited pipeline and rebuild the contaminated social candidate — B7.**
+  Done 2026-11-09 (code and staged candidate; not promoted). The 2026-11-09 audit found
+  social raw counts summing to 566,678,860 against a stored denominator of 536,523,553
+  (the 30,155,307 excess equals the test checkpoint), 2,382 lemma ratios below 1, and
+  recovery, derivation, validation and distribution gates that missed both. All nine
+  findings (A01–A09) are fixed with regressions across the real adapters — see the
+  2026-11-09 activity-history entry, ADR-004/005/006, and
+  [`docs/briefs/B7-pipeline-audit-remediation.md`](briefs/B7-pipeline-audit-remediation.md).
+  Social was rebuilt from the 30 retained dumps into a staged candidate (build
+  `eb23d6fe219530ceb9bc65caef6475dc`, 0.2.1): exactly 536,523,553 tokens and 13,717,928
+  documents, strict validation 8/8, independent rebuild identical. The baseline database,
+  blobs, review TSV, checkpoints and dumps are unchanged. **Promotion is the owner's
+  call**: `docs/release-runbook.md` §2.
+
+- [ ] **Promote the 0.2.1 candidate, or not — owner decision.** Staged at
+  `data/staging/2026-11-09-b7/` (gitignored). Runbook: `docs/release-runbook.md` §2–3.
+  Before promoting, commit the B7 code, then rerun `build_manifest.py`,
+  `build_package.py` and `validate.py --strict` (about 10 minutes) so the manifest names a
+  clean revision instead of `81635a6` + `dirty: true`. The working checkout's
+  `wrodfreq/data/` still holds the format-1 0.2.0 blobs, which the 0.2.1 code refuses;
+  `build_package.py --install` fixes that as part of promotion.
+
+- [ ] **`top_n_list` takes `n` first, unlike `wordfreq`'s `top_n_list(lang, n)`.** Found
+  2026-11-09 while writing the install probe: `wrodfreq.top_n_list("ro", 5)` raises a
+  `TypeError`. CLAUDE.md promises "one changed import line is the entire adoption story";
+  this call breaks it. B7 kept public signatures unchanged by instruction. Decide whether
+  to accept both orders (an `isinstance(n, str)` shim) or document the difference.
+
+- [ ] **Research, not repair (B7 §12): what `n_reliable` and `spread` can claim.**
+  `n_reliable` counts sources that cleared their floor; it is not proven independence
+  (sources overlap: news sites inside CulturaX, Reddit quotes of news). A word with one
+  reliable source has `spread = 0`, which shows no agreement. Held-out tail calibration,
+  source-overlap measurement, and a median-vs-trimmed-mean comparison are separate
+  research tasks. Do not change the estimators without one.
 
 - [ ] maybe implement with another model and check results?
 

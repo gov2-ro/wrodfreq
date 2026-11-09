@@ -10,10 +10,10 @@
 # the reference is absent, by design.
 #
 # So the pipeline's *logic* is covered here by the test suite instead,
-# including an end-to-end run of stages 2-5 over a synthetic database with the
-# byte-identical idempotence assertion check 6 makes (tests/test_pipeline.py).
-# Running the real validate.py against the real corpus stays a local
-# pre-release step.
+# including end-to-end runs of every stage over synthetic databases, the
+# read-only validator, and the independent rebuild (tests/). Running the strict
+# real-data validation (build/validate.py --strict) stays a local pre-release
+# step; its hash-bound report travels inside the release-candidate bundle.
 
 name: CI
 
@@ -73,15 +73,20 @@ jobs:
         run: |
           set -e
           for f in build/*.py; do
-            case "$(basename "$f")" in
-              status.py) continue ;;   # no argparse CLI
-            esac
             echo "--- $f --help"
             python "$f" --help > /dev/null
           done
 
   package:
-    name: wheel builds and imports
+    # The old job built a wheel from the checkout, where the data files are
+    # gitignored, so it shipped a data-less wheel and called that a pass (brief
+    # B7, finding A08). Now: build a tiny *synthetic* generation through the real
+    # pipeline, stage it, build the sdist and the wheel FROM that sdist, check
+    # both archives carry the generation's files and build id, then install the
+    # wheel into a clean venv outside the checkout (PYTHONPATH unset) and look
+    # words up. Lemma present and lemma absent are both exercised. The bundles
+    # are marked synthetic; the release gate rejects them by construction.
+    name: sdist -> wheel with data, installed and used
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -90,18 +95,14 @@ jobs:
           python-version: "3.12"
       - run: |
           python -m pip install --upgrade pip
-          pip install build
-      - name: Build sdist + wheel
-        run: python -m build
-      - name: Install the wheel into a clean venv and import it
-        # The data files are gitignored, so a wheel built here ships without them.
-        # The lemma layer must degrade rather than explode when its file is
-        # absent (lemma_detail -> None); the surface table is required.
+          pip install -e ".[dev,build]"
+      - name: Synthetic generation, bundle, install (lemma layer present)
         run: |
-          python -m venv /tmp/wheeltest
-          /tmp/wheeltest/bin/pip install -q dist/*.whl
-          /tmp/wheeltest/bin/python -c "
-          import wrodfreq
-          print('version', wrodfreq.__version__)
-          print('lemma_detail degrades:', wrodfreq.lemma_detail('casă'))
-          "
+          gen=$(python build/make_synthetic.py --out-dir "$RUNNER_TEMP/syn" | tail -1)
+          python build/make_distribution.py --generation "$gen" --out "$RUNNER_TEMP/bundle" --allow-synthetic
+          env -u PYTHONPATH python build/check_release.py --bundle "$RUNNER_TEMP/bundle" --mode ci-synthetic --install-test
+      - name: Synthetic generation, bundle, install (lemma layer absent)
+        run: |
+          gen=$(python build/make_synthetic.py --no-lemma --out-dir "$RUNNER_TEMP/syn-nolemma" | tail -1)
+          python build/make_distribution.py --generation "$gen" --out "$RUNNER_TEMP/bundle-nolemma" --allow-synthetic
+          env -u PYTHONPATH python build/check_release.py --bundle "$RUNNER_TEMP/bundle-nolemma" --mode ci-synthetic --install-test

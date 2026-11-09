@@ -5,9 +5,10 @@ este numărat separat, iar abia apoi rezultatele se combină (vezi [method.md](m
 Acest document spune, pentru fiecare sursă: ce este, cât de mare e, din ce perioadă
 vine, ce licență are și ce trebuie să știi când te bazezi pe ea.
 
-Cifrele sunt cele din construcția `0.2.0` (octombrie 2026). Ele sunt citite din baza de
-date, nu scrise de mână: `build_info()` și tabela `sources` din `wrodfreq.db` au
-întotdeauna ultimul cuvânt.
+Cifrele sunt cele din construcția `0.2.1` (`eb23d6fe219530ceb9bc65caef6475dc`, noiembrie
+2026). Ele sunt citite din baza de date, nu scrise de mână: `build_info()` și tabela
+`sources` din `wrodfreq.db` au întotdeauna ultimul cuvânt. Numitorii sunt aceiași ca în
+0.2.0; în 0.2.1 s-au corectat numărătorile din `social` (vezi mai jos).
 
 ## Pe scurt
 
@@ -86,6 +87,14 @@ al XIX-lea) ar fi marcată separat și nu ar intra în valoarea implicită.
 - **De unde.** Arhiva Arctic Shift (`arctic-shift.photon-reddit.com`), descărcată cu
   `build/fetch_social.py`. Istoricul r/Romania începe în martie 2010.
 - **Mărime.** 13,7 milioane de comentarii și postări, 0,54 miliarde de cuvinte.
+- **Renumărat în 0.2.1.** În 0.2.0, o rulare de probă (primele 50.000 de mesaje din fiecare
+  fișier) a fost adunată peste numărătorile reale: 30.155.307 cuvinte în plus față de
+  numitor. În 0.2.1 sursa a fost renumărată de la zero din cele 30 de fișiere păstrate,
+  într-o bază separată. Au fost citite 18.458.171 de înregistrări, niciuna deteriorată:
+  1.527.106 șterse, de roboți sau goale, 211.478 fără niciun cuvânt după curățare, 3.001.659
+  fără semnal de română. Au rămas 13.717.928 de mesaje (74,3%) cu 536.523.553 de cuvinte,
+  exact numitorul din 0.2.0. Pentru
+  fiecare fișier, numărul de înregistrări citite este egal cu cel înregistrat la descărcare.
 - **Licență.** Fără licență formală de redistribuire; conținut public, adunat pentru
   cercetare. Din el se păstrează **doar numărători** de cuvinte, niciodată textul sau
   numele autorilor.
