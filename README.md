@@ -82,11 +82,11 @@ merge is always computed from the raw counts, never stored in place over them.
 
 ---
 
-> **Status: 0.2.1 candidate built and verified in staging; not yet promoted or published.**
+> **Status: 0.2.1 built, verified and promoted locally (2026-11-09); not yet published.**
 > A 2026-11-09 audit found two data defects in build 0.2.0: the `social` counts held a
 > test run twice (30,155,307 extra tokens), and 2,382 lemmas had `family_ratio` below 1.
 > The pipeline was repaired (ADR-004 to ADR-006), `social` was recounted from its raw
-> dumps, and candidate build `eb23d6fe219530ceb9bc65caef6475dc` passes the strict, read-only
+> dumps, and build `9550cd80441597586fa1a74eaf9069b2` passes the strict, read-only
 > validation 8/8 and an independent byte-identical rebuild: 6,039,510 shipped words,
 > 180,565 lemmas. **Not yet published to PyPI** — build the wheel yourself for now (see
 > below).
@@ -142,8 +142,10 @@ package.
 The TSV is a **review copy of build 0.2.0** and can change. It moves into this repository
 after the review. SHA-256 (of the 0.2.0 file only):
 `06f85c941e0ce8f3ef8cf9b5f04b6dc37cedb9b2c12faa75463eea66b8502fc3`.
-**This copy has the two 0.2.0 defects described above.** The corrected 0.2.1 TSV replaces
-it, with a new checksum, once the owner adopts the candidate (`docs/release-runbook.md`).
+**This copy has the two 0.2.0 defects described above.** The corrected 0.2.1 TSV
+(build `9550cd80441597586fa1a74eaf9069b2`) has SHA-256
+`8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62`; it replaces the Drive
+copy once it is uploaded (`docs/release-runbook.md`).
 
 Of the 6,041,542 words, 4,838,839 (80%) are reliable in only one source. For a cleaner list,
 keep the rows with `n_reliable >= 2` (1,202,703 words).

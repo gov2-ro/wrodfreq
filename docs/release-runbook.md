@@ -99,46 +99,28 @@ wrodfreq/`), or a reinstall of a 0.2.0 wheel.
 3. The workflow verifies the digest, checks the bundle, and installs the wheel. It does
    not publish. Publishing to PyPI stays manual.
 
-## 5. The 0.2.1 candidate (brief B7)
+## 5. The 0.2.1 build (brief B7) — promoted 2026-11-09
 
-Filled in from the staged run on 2026-11-09; see `docs/activity-history.md`.
+The candidate was first built as `eb23d6fe219530ceb9bc65caef6475dc` from the uncommitted
+tree, then rebuilt from commit `7d4d612` (branch `b7-pipeline-repair`, `dirty: false`)
+as the promoted build. The data values are identical; the build id differs because the
+code identity is part of it.
 
 | What | Value |
 |---|---|
 | Staging directory | `data/staging/2026-11-09-b7/` (gitignored) |
-| Build id | `eb23d6fe219530ceb9bc65caef6475dc` (0.2.1, data format 2, build date 2026-11-09) |
-| Candidate database | `candidate.db`, SHA-256 `ef468da19885c9f45b973639d0418a2245aa93075bd952da6ce0ef2f9cdc93b8` |
-| Staged social source | `social.db`, SHA-256 `fa13638997f15040f664e341541675cf92c1c65432222f5978167a8a07eaf658` |
-| Generation | `builds/eb23d6fe219530ceb9bc65caef6475dc/` |
-| `ro_surface.msgpack.xz` | `6483c18328ebce8e665ce00f2294d5296ebd1d50d427fc853dbf6c1c1e163e28` (28,555,296 B) |
-| `ro_by_source.msgpack.xz` | `4c532b47e8f4c284a30707e179698ed4f1ab92cff8415bd5d4ecc4639b043734` (10,000,232 B) |
-| `ro_lemma.msgpack.xz` | `fef835f9776c69317b025b4b9fe6ef3d42ebab87dbe4d2ea630aef2aa2fc9936` (1,107,800 B) |
-| `ro_surface.tsv.gz` | `8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62` (35,763,094 B) |
-| Bundle tarball | `bundle.tar.gz`, SHA-256 `3af9fabdafcec58d65dbce773c74aa939e5f346d0aaab86d37b423ab53347a20` |
-| Strict validation | `validation.json`: 8/8 pass, `release_eligible: true` |
-| Independent rebuild | `rebuild.json`: same build id, files and tables identical |
-| Comparison | `compare.json` (see `docs/activity-history.md`, 2026-11-09) |
-| Baseline (rollback) | `data/wrodfreq.db` SHA-256 `f990c4837c424772f54474ba50fafbd62118721d6266436b3099ad41df44fb10`; review TSV `06f85c941e0ce8f3ef8cf9b5f04b6dc37cedb9b2c12faa75463eea66b8502fc3` |
+| Build id | `9550cd80441597586fa1a74eaf9069b2` (0.2.1, data format 2, build date 2026-11-09) |
+| Manifest | `inputs-final.json`, code revision `7d4d6128759efc621ca122509d44661fa91c7dbf` |
+| Database (now `data/wrodfreq.db`) | SHA-256 `ef468da19885c9f45b973639d0418a2245aa93075bd952da6ce0ef2f9cdc93b8` |
+| `ro_surface.msgpack.xz` | `b33b55d1f7c8993ea9b1974e1376bbade187ea9e6b914bc6c5aede3a0b1ce5cd` (28,556,304 B) |
+| `ro_by_source.msgpack.xz` | `a278d9fb3a572685ab93d70592c548c179272dcd499ac03a0371090bddc1d9b1` (9,999,328 B) |
+| `ro_lemma.msgpack.xz` | `7b446842bdef5380b7e2636316221fc76d29eadc14737275333eb98b83138e6d` (1,107,152 B) |
+| `ro_surface.tsv.gz` (now `release/`) | `8bb1592e74a93afa9a909a48a44a26482fc7cbb07464894dc31ed1ceca54ca62` (35,763,094 B) |
+| Bundle tarball | `bundle-final.tar.gz`, SHA-256 `5223adf922d3220c2eed865003d531a17e067ecf704b04b9edad39df0a1838d2` |
+| Strict validation | `validation-final.json`: 8/8, `release_eligible: true` |
+| Independent rebuild | `rebuild-final.json`: same build id, files and tables identical |
+| Release preflight | `check_release.py --install-test`: passed |
+| Rollback copies | `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/` (0.2.0 db `f990c483…`, blobs, TSV `06f85c94…`, `hashes.txt`) |
 
-**Before promoting**, commit the B7 code and rebuild the generation from the committed
-tree, so the manifest names a clean revision (this one names `81635a6` with
-`dirty: true`). Only the manifest, the package and the checks rerun — about 25 minutes;
-the candidate database stays as it is:
-
-```bash
-ST=data/staging/2026-11-09-b7
-DEX=~/devbox/otios/data/processed/inflected_forms.db; WF=~/devbox/otios/.venv/bin/python3
-python build/build_manifest.py --db $ST/candidate.db --build-date 2026-11-09 --out $ST/inputs-final.json
-python build/build_package.py --db $ST/candidate.db --manifest $ST/inputs-final.json --out-root $ST/builds
-BID=$(python -c "import json;print(json.load(open('$ST/inputs-final.json'))['build_id'])")
-python build/validate.py --db $ST/candidate.db --generation $ST/builds/$BID --strict \
-    --dex-db $DEX --wordfreq-python $WF --report $ST/validation-final.json
-python build/check_rebuild.py --db $ST/candidate.db --generation $ST/builds/$BID \
-    --work-dir $ST/rebuild-final --dex-db $DEX --wordfreq-python $WF --strict --report $ST/rebuild-final.json
-python build/make_distribution.py --generation $ST/builds/$BID --validation $ST/validation-final.json \
-    --rebuild-report $ST/rebuild-final.json --out $ST/bundle-final --tar
-```
-
-The data values do not change; the build id does, because the code identity is part of
-it. Update the build id in `README.md`, `docs/method.md` and `docs/sources.md` to the
-new one when you promote.
+Still to do by hand: upload the 0.2.1 TSV to Drive and update the README link; host
+`bundle-final.tar.gz` and run the release workflow when you want to publish.

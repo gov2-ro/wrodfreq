@@ -5,7 +5,7 @@ este numărat separat, iar abia apoi rezultatele se combină (vezi [method.md](m
 Acest document spune, pentru fiecare sursă: ce este, cât de mare e, din ce perioadă
 vine, ce licență are și ce trebuie să știi când te bazezi pe ea.
 
-Cifrele sunt cele din construcția `0.2.1` (`eb23d6fe219530ceb9bc65caef6475dc`, noiembrie
+Cifrele sunt cele din construcția `0.2.1` (`9550cd80441597586fa1a74eaf9069b2`, noiembrie
 2026). Ele sunt citite din baza de date, nu scrise de mână: `build_info()` și tabela
 `sources` din `wrodfreq.db` au întotdeauna ultimul cuvânt. Numitorii sunt aceiași ca în
 0.2.0; în 0.2.1 s-au corectat numărătorile din `social` (vezi mai jos).

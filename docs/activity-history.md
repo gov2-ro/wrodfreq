@@ -1539,3 +1539,21 @@ VALIDATION_GATE → `test_stale_merged_fixture_fails_strict…`; MIXED_BUILD_FIL
 Found on the way, not changed (BACKLOG): `top_n_list(n, lang)` takes `n` first, unlike
 `wordfreq`. The candidate's manifest names `81635a6` + `dirty: true` because the work is
 uncommitted; re-manifest after committing. Not promoted, not tagged, not published.
+
+## 2026-11-09 — 0.2.1 promoted
+
+On the owner's go-ahead: committed the B7 work as `7d4d612` on branch
+`b7-pipeline-repair` (`AGENTS.md` left untracked). Regenerated the build from the clean
+tree (`inputs-final.json`, revision `7d4d612`, `dirty: false`): build
+**`9550cd80441597586fa1a74eaf9069b2`**, the same data as candidate `eb23d6fe…` with a new id
+because the code identity changed. Strict validation 8/8; independent rebuild same id,
+files and tables identical; bundle `bundle-final.tar.gz` (SHA-256 `5223adf9…38d2`) passes
+`check_release.py --install-test`.
+
+Promoted per `docs/release-runbook.md` §2: the 0.2.0 database (`f990c483…`), blobs and
+review TSV (`06f85c94…`) moved to
+`data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/`; `data/wrodfreq.db` is now
+the candidate (`ef468da1…`), `wrodfreq/data/` holds build `9550cd80…` with `build.json`,
+and `release/ro_surface.tsv.gz` is the 0.2.1 TSV (`8bb1592e…`). Strict validation of the
+promoted `data/wrodfreq.db` against the generation: 8/8, inputs unchanged. The Drive review
+copy was not touched; uploading the 0.2.1 TSV and merging the branch remain for the owner.

@@ -21,7 +21,7 @@ numărul pe care îl vezi când scrii `zipf_frequency('cuvânt')`. Cine vrea să
 într-o lucrare găsește la final ce să scrie. Sursele sunt descrise în
 [sources.md](sources.md).
 
-Versiunea descrisă aici: **0.2.1** (construcția `eb23d6fe219530ceb9bc65caef6475dc`).
+Versiunea descrisă aici: **0.2.1** (construcția `9550cd80441597586fa1a74eaf9069b2`).
 Ce s-a corectat față de 0.2.0 este în [secțiunea 10](#10-corecturile-din-021).
 
 ## 1. Ce este și ce nu este
@@ -294,7 +294,7 @@ Pachetul îți spune exact ce construcție folosești:
 >>> import wrodfreq
 >>> info = wrodfreq.build_info()
 >>> info['version'], info['build_id'], info['built']
-('0.2.1', 'eb23d6fe219530ceb9bc65caef6475dc', '2026-11-09')
+('0.2.1', '9550cd80441597586fa1a74eaf9069b2', '2026-11-09')
 >>> info['sources']
 ['eu', 'news', 'social', 'subs', 'web', 'wiki']
 ```
@@ -303,7 +303,7 @@ Pachetul îți spune exact ce construcție folosești:
 construcție dau același `build_id` și aceleași fișiere, bit cu bit. Într-o lucrare, scrie
 versiunea, `build_id` și lista surselor, de exemplu:
 
-> wROdfreq 0.2.1, construcția eb23d6fe219530ceb9bc65caef6475dc (9 noiembrie 2026; surse:
+> wROdfreq 0.2.1, construcția 9550cd80441597586fa1a74eaf9069b2 (9 noiembrie 2026; surse:
 > eu, news, social, subs, web, wiki), https://github.com/gov2-ro/wrodfreq
 
 ## 9. Cum se reface totul de la zero

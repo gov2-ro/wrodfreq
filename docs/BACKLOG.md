@@ -18,13 +18,17 @@ Open bugs, debt, and enhancements. Add new entries with `- [ ]` and enough conte
   blobs, review TSV, checkpoints and dumps are unchanged. **Promotion is the owner's
   call**: `docs/release-runbook.md` §2.
 
-- [ ] **Promote the 0.2.1 candidate, or not — owner decision.** Staged at
-  `data/staging/2026-11-09-b7/` (gitignored). Runbook: `docs/release-runbook.md` §2–3.
-  Before promoting, commit the B7 code, then rerun `build_manifest.py`,
-  `build_package.py` and `validate.py --strict` (about 10 minutes) so the manifest names a
-  clean revision instead of `81635a6` + `dirty: true`. The working checkout's
-  `wrodfreq/data/` still holds the format-1 0.2.0 blobs, which the 0.2.1 code refuses;
-  `build_package.py --install` fixes that as part of promotion.
+- [x] **Promote the 0.2.1 candidate.** Done 2026-11-09 on the owner's go-ahead: code
+  committed (`7d4d612`, branch `b7-pipeline-repair`), build regenerated from the clean
+  tree as `9550cd80441597586fa1a74eaf9069b2`, revalidated 8/8, rebuilt identically, and
+  promoted into `data/wrodfreq.db`, `wrodfreq/data/` and `release/`. Rollback copies in
+  `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/`.
+
+- [ ] **Publish the 0.2.1 review TSV and merge the branch.** Upload
+  `release/ro_surface.tsv.gz` (SHA-256 `8bb1592e…ca62`) to Drive, update the README link
+  and say the 0.2.0 file is superseded; merge and push `b7-pipeline-repair`. For a PyPI
+  release, host `data/staging/2026-11-09-b7/bundle-final.tar.gz` (SHA-256 `5223adf9…38d2`)
+  and run the release workflow (`docs/release-runbook.md` §4).
 
 - [ ] **`top_n_list` takes `n` first, unlike `wordfreq`'s `top_n_list(lang, n)`.** Found
   2026-11-09 while writing the install probe: `wrodfreq.top_n_list("ro", 5)` raises a

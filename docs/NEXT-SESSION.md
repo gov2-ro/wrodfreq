@@ -7,35 +7,28 @@ consolidated pointer, not a new source of truth — everything here is covered i
 in `docs/activity-history.md`'s dated entries and `docs/BACKLOG.md`'s checklist. Read this
 first to reorient, then follow the links.
 
-## Immediate follow-up — the 0.2.1 candidate needs an owner decision (2026-11-09)
+## Where things stand — 0.2.1 promoted locally (2026-11-09)
 
-**Brief B7 is implemented** — all nine audit findings (A01–A09) are fixed in code with
-regression tests across the real ingesters, and a corrected candidate was built and
-verified **in staging**. Nothing was promoted, tagged or published; the baseline
-database, blobs, review TSV, checkpoints and dumps are byte-identical to before.
+**Brief B7 is implemented and its build is promoted.** All nine audit findings (A01–A09)
+are fixed with regression tests (commit `7d4d612`, branch `b7-pipeline-repair`, not yet
+merged or pushed). Build `9550cd80441597586fa1a74eaf9069b2` (0.2.1, data format 2) is now
+`data/wrodfreq.db`, `wrodfreq/data/` and `release/ro_surface.tsv.gz`; strict validation
+8/8, independent rebuild byte-identical, release preflight with an installed wheel passes.
+Social was recounted from its 30 dumps: exactly 536,523,553 tokens / 13,717,928 documents.
+Details: `docs/activity-history.md` (2026-11-09), `docs/release-runbook.md` §5.
 
-- **Candidate:** build `eb23d6fe219530ceb9bc65caef6475dc` (0.2.1, data format 2) in
-  `data/staging/2026-11-09-b7/`. Social was recounted from the 30 retained dumps:
-  exactly 536,523,553 tokens / 13,717,928 documents. Strict read-only validation 8/8
-  (`release_eligible`), independent rebuild byte-identical, release preflight with an
-  installed-wheel test passes. Deltas: 2,036 words leave `merged`, 158,480 values move
-  by > 0.005 (median 0), 2,382 → 0 lemma ratios below 1. Details:
-  `docs/activity-history.md` (2026-11-09) and `docs/release-runbook.md` §5.
-- **Decide:** promote the candidate (runbook §2) or not. First commit the B7 code and
-  re-manifest from the committed tree (runbook §5, ~25 min) — the current manifest names
-  `81635a6` + `dirty: true`.
-- **The working checkout's `wrodfreq/data/` still holds the 0.2.0 (format 1) blobs.** The
-  0.2.1 code refuses them with a rebuild message; `build_package.py --install` with the
-  candidate generation fixes that (part of promotion).
-- **Public review copy:** the Drive TSV is still 0.2.0 and has both defects; the README
-  now says so. Replace it (new checksum) only after adoption.
+- **Rollback:** `data/rollback/2026-11-09-pre-9550cd80441597586fa1a74eaf9069b2/`
+  (runbook §3). Going back to 0.2.0 data also needs the 0.2.0 code.
+- **Still to do by hand:** merge/push `b7-pipeline-repair`; upload the 0.2.1 TSV
+  (`8bb1592e…`) to Drive and update the README link; host `bundle-final.tar.gz` and run
+  the release workflow when publishing. The Drive copy is still 0.2.0 and the README
+  says it has both defects.
 - **Do not** run a stage against `data/wrodfreq.db` to inspect it. `build/integrity.py`
-  and `build/validate.py` open it read-only; everything else writes.
-- New in BACKLOG: `top_n_list(n, lang)` argument order differs from `wordfreq`; research
-  questions about what `n_reliable`/`spread` can claim (no estimator change made).
+  and `build/validate.py` open it read-only.
+- Open in BACKLOG: `top_n_list(n, lang)` argument order differs from `wordfreq`; research
+  questions about what `n_reliable`/`spread` can claim.
 
-The portable `docs/briefs/B7-audit-reproduce.py` asserts the *old* broken behaviour and
-now fails on its first case, as intended. The historical status below predates the audit.
+The historical status below predates the audit.
 
 ## Where things stand (2026-10-05)
 
